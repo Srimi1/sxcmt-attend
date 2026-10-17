@@ -1,0 +1,5 @@
+# Generated dependency coordinates, not executable configuration.
+# The guard mistakes the testRuntimeClasspath dependency
+# org.jetbrains.kotlinx:kotlinx-coroutines-debug:1.8.0 for a DEBUG=1 setting.
+# Keep this exception scoped to this lockfile; production source remains scanned.
+core/gradle.lockfile

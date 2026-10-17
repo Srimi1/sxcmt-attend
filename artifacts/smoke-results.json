@@ -1,0 +1,14 @@
+{
+  "passed": 8,
+  "steps": [
+    "Clean launch shows real-data onboarding",
+    "Sample mode is labelled and shows 161/185 = 87.03%",
+    "Planned absence saves from Calendar",
+    "Forecast renders planned-absence scenario",
+    "Timetable editor retains both Friday IFS periods",
+    "Target setting persists through process restart without ERP",
+    "Live ERP sign-in page loads inside restricted WebView; no credentials entered",
+    "Disconnect is available before first import and returns to clean onboarding"
+  ],
+  "real_student_import_verified": false
+}
