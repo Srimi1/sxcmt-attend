@@ -21,10 +21,23 @@ class RoutineTest : FunSpec({
         val versions = listOf(v(1, day.minusDays(30)), v(2, day.minusDays(3)), v(3, day.minusDays(30)))
         Routines.active(versions, day)!!.version shouldBe 3
     }
-    test("before any version starts, the earliest one is used; no versions means none") {
-        Routines.active(listOf(v(1, day.plusDays(9)), v(2, day.plusDays(2))), day)!!.version shouldBe 2
+    test("future versions remain upcoming until their effective date") {
+        val versions = listOf(v(1, day.plusDays(9)), v(2, day.plusDays(2)))
+        Routines.active(versions, day) shouldBe null
+        Routines.upcoming(versions, day)!!.version shouldBe 2
+        Routines.autoApply(versions, null, day) shouldBe null
+        Routines.autoApply(versions.map { it.copy(byMe = true) }, 1, day) shouldBe null
+        Routines.pending(versions, 1, null, day) shouldBe null
+        Routines.active(versions, day.plusDays(2))!!.version shouldBe 2
+        Routines.autoApply(versions, null, day.plusDays(2))!!.version shouldBe 2
         Routines.active(emptyList(), day) shouldBe null
         Routines.upcoming(emptyList(), day) shouldBe null
+    }
+    test("the newest revision wins when upcoming versions start on the same day") {
+        val versions = listOf(v(1, day.minusDays(1)), v(2, day.plusDays(2)), v(3, day.plusDays(2)))
+        Routines.upcoming(versions, day)!!.version shouldBe 3
+        Routines.upcoming(versions.reversed(), day)!!.version shouldBe 3
+        Routines.active(versions, day.plusDays(2))!!.version shouldBe 3
     }
     test("validation mirrors server rules") {
         Routines.validate(SeedTimetable.sessions) shouldBe null

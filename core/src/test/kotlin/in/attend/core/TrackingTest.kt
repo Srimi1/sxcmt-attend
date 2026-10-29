@@ -139,4 +139,105 @@ class TrackingTest : FunSpec({
         AttendanceTracker.assumedMark(friday, slots[0], emptyList(), null, null, friday, LocalTime.MAX) shouldBe null
         AttendanceTracker.assumedEntries(null, emptyList(), SeedTimetable.sessions, emptyList(), friday, friday.plusDays(1), LocalTime.MAX) shouldBe emptyList()
     }
+    test("a term end without sheet totals excludes later explicit and assumed periods") {
+        val termEnd = friday.minusDays(1)
+        val entry = AttendanceEntry(friday, slots[0].id, AttendanceMark.PRESENT, slots[0])
+        val summary = AttendanceTracker.summarize(null, listOf(entry), SeedTimetable.sessions, emptyList(),
+            friday, friday, assumeFrom = friday, termEnd = termEnd)
+        summary.baseline shouldBe null
+        summary.studentCounts shouldBe Counts(0, 0)
+        summary.assumed shouldBe 0
+        summary.unmarked shouldBe 0
+        AttendanceTracker.assumedEntries(null, emptyList(), SeedTimetable.sessions, emptyList(),
+            friday, friday, LocalTime.MAX, termEnd).size shouldBe 0
+    }
+    test("a term end without sheet totals bounds unmarked periods and survives in the tracked baseline") {
+        val entry = AttendanceEntry(friday, slots[0].id, AttendanceMark.PRESENT, slots[0])
+        val summary = AttendanceTracker.summarize(null, listOf(entry), SeedTimetable.sessions, emptyList(),
+            friday.plusDays(7), friday, termEnd = friday)
+        summary.baseline!!.counts shouldBe Counts(1, 1)
+        summary.baseline!!.termEnd shouldBe friday
+        summary.unmarked shouldBe 4
+        ForecastEngine.forecast(summary.baseline!!, friday.plusDays(14), Scenario.ATTEND_ALL,
+            SeedTimetable.sessions, emptyList()).futureHeld shouldBe 0
+    }
+
+    test("a timetable change never backfills new ids into already elapsed periods") {
+        val cutoff = friday.atTime(11, 0)
+        val changed = slots.map { it.copy(id = "new-${it.id}") }
+        val saved = slots.take(2).map { AttendanceEntry(friday, it.id, AttendanceMark.PRESENT, it) }
+        val summary = AttendanceTracker.summarize(null, saved, changed, emptyList(), friday, friday,
+            assumeFrom = friday.minusDays(7), assumeAfter = cutoff)
+        summary.baseline!!.counts shouldBe Counts(5, 5)
+        summary.assumed shouldBe 3
+        val nextDay = AttendanceTracker.assumedEntries(null, saved, changed, emptyList(), friday.plusDays(1),
+            friday.minusDays(7), LocalTime.MAX, assumeAfter = cutoff)
+        nextDay.size shouldBe 3
+        nextDay.all { it.date == friday && it.sessionId in changed.drop(2).map { s -> s.id } } shouldBe true
+        AttendanceTracker.assumedMark(friday, changed[0], emptyList(), friday, null,
+            friday.plusDays(1), LocalTime.MAX, cutoff) shouldBe null
+        AttendanceTracker.assumedMark(friday.plusDays(7), changed[0], emptyList(), friday, null,
+            friday.plusDays(7), LocalTime.MAX, cutoff) shouldBe AttendanceMark.PRESENT
+    }
+    test("the change boundary excludes exact end time and ambiguous times without hiding saved marks") {
+        val cutoff = friday.atTime(9, 50)
+        AttendanceTracker.assumedMark(friday, slots[0], emptyList(), friday, null,
+            friday, LocalTime.MAX, cutoff) shouldBe null
+        val vague = slots[0].copy(time = "Morning")
+        AttendanceTracker.assumedMark(friday, vague, emptyList(), friday, null,
+            friday.plusDays(1), LocalTime.MAX, cutoff) shouldBe null
+        AttendanceTracker.assumedMark(friday.plusDays(7), vague, emptyList(), friday, null,
+            friday.plusDays(8), LocalTime.MAX, cutoff) shouldBe AttendanceMark.PRESENT
+    }
+
+    test("afternoon AM PM labels do not count classes in the morning") {
+        val afternoon = slots[0].copy(time = "12:10–1:00 PM")
+        AttendanceTracker.endTime(afternoon) shouldBe LocalTime.of(13, 0)
+        AttendanceTracker.assumedMark(friday, afternoon, emptyList(), friday, null,
+            friday, LocalTime.of(10, 0)) shouldBe null
+        AttendanceTracker.assumedMark(friday, afternoon, emptyList(), friday, null,
+            friday, LocalTime.of(13, 0)) shouldBe AttendanceMark.PRESENT
+        AttendanceTracker.endTime(slots[0].copy(time = "11:10 AM–12:00 PM")) shouldBe LocalTime.NOON
+        AttendanceTracker.endTime(slots[0].copy(time = "11:10 PM–12:00 a.m.")) shouldBe LocalTime.MIDNIGHT
+        AttendanceTracker.endTime(slots[0].copy(time = "13:00 PM")) shouldBe null
+        AttendanceTracker.endTime(slots[0].copy(time = "119:50")) shouldBe null
+        AttendanceTracker.endTime(slots[0].copy(time = "09:00–119:50")) shouldBe null
+    }
+
+    test("replacement ids cannot regenerate an already saved period after its time changes") {
+        val old = slots[0]
+        val saved = AttendanceEntry(friday, old.id, AttendanceMark.PRESENT, old)
+        val replacement = old.copy(id = "replacement", subject = "NEW", title = "New subject", time = "14:00–15:00")
+        val schedule = listOf(replacement)
+        AttendanceTracker.sessionsOn(friday, listOf(saved), schedule, emptyList()) shouldBe listOf(DatedSession(friday, old))
+        val summary = AttendanceTracker.summarize(null, listOf(saved), schedule, emptyList(), friday, friday,
+            assumeFrom = friday, assumeAfter = friday.atTime(12, 0))
+        summary.baseline!!.counts shouldBe Counts(1, 1)
+        summary.baseline!!.subjects.single().code shouldBe old.subject
+        summary.assumed shouldBe 0
+        AttendanceTracker.summarize(null, listOf(saved), schedule, emptyList(), friday, friday).unmarked shouldBe 0
+        AttendanceTracker.assumedEntries(null, listOf(saved), schedule, emptyList(), friday.plusDays(7),
+            friday.plusDays(7), LocalTime.MAX).single().sessionId shouldBe replacement.id
+    }
+    test("replacement suppression respects weekday and preserves all explicit history") {
+        val old = slots[0]
+        val replacement = old.copy(id = "replacement", subject = "NEW", title = "New subject")
+        val saved = AttendanceEntry(friday, old.id, AttendanceMark.ABSENT, old)
+        val explicitReplacement = AttendanceEntry(friday, replacement.id, AttendanceMark.PRESENT, replacement)
+        AttendanceTracker.summarize(null, listOf(saved, explicitReplacement), listOf(replacement), emptyList(),
+            friday, friday, assumeFrom = friday).baseline!!.counts shouldBe Counts(1, 2)
+        val differentDay = old.copy(day = DayOfWeek.THURSDAY)
+        AttendanceTracker.sessionsOn(friday, listOf(saved.copy(sessionSnapshot = differentDay)), listOf(replacement),
+            emptyList()) shouldBe listOf(DatedSession(friday, replacement))
+    }
+    test("a cancellation of a recorded slot does not expose its replacement as unmarked") {
+        val old = slots[0]
+        val saved = AttendanceEntry(friday, old.id, AttendanceMark.PRESENT, old)
+        val replacement = old.copy(id = "replacement")
+        val cancelled = CalendarException("cancel", friday, friday, ExceptionKind.CANCELLATION, "No class", old.id)
+        val summary = AttendanceTracker.summarize(null, listOf(saved), listOf(replacement), listOf(cancelled), friday, friday)
+        summary.baseline shouldBe null
+        summary.unmarked shouldBe 0
+    }
+
 })

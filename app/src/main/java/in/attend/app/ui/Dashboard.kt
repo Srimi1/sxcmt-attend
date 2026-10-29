@@ -20,8 +20,9 @@ fun Dashboard(data: AppData, demo: Boolean, mark: (LocalDate, Set<String>, Atten
               noClass: (LocalDate, WeekSession, Boolean) -> Unit, preview: () -> Unit,
               forecast: () -> Unit, calendar: () -> Unit, activity: () -> Unit, sheet: () -> Unit,
               acceptRoutine: (RoutineVersion) -> Unit = {}, dismissRoutine: (RoutineVersion) -> Unit = {}) {
-    val today = LocalDate.now()
-    val tracking = data.tracking(today)
+    val now = LocalAttendanceTime.current
+    val today = now.toLocalDate()
+    val tracking = data.tracking(today, now.toLocalTime())
     val base = tracking.baseline
     val sheetBase = data.sheetBaseline
     val sessions = data.periodsOn(today)
@@ -53,7 +54,7 @@ fun Dashboard(data: AppData, demo: Boolean, mark: (LocalDate, Set<String>, Atten
                         val allowance = AttendanceMath.missAllowance(base.counts, data.targetBps)
                         Text(if (recovery == 0L && allowance == 0L) "You're right at ${targetLabel(data.targetBps)}. Missing the next class takes you below it."
                             else if (recovery == 0L) "You can miss ${classes(allowance)} more and stay at ${targetLabel(data.targetBps)}."
-                            else if (recovery == null) "Attend every remaining class to reach ${targetLabel(data.targetBps)}."
+                            else if (recovery == null) "Past absences mean you cannot reach 100% through future classes alone."
                             else "Attend the next ${classes(recovery)} in a row to reach ${targetLabel(data.targetBps)}.",
                             style = MaterialTheme.typography.bodyMedium, color = if (recovery == 0L) onTrackColor() else belowColor())
                     }
@@ -85,13 +86,14 @@ fun Dashboard(data: AppData, demo: Boolean, mark: (LocalDate, Set<String>, Atten
                     covered -> Text("Today is already inside your sheet totals.", style = MaterialTheme.typography.bodyMedium)
                     else -> {
                         sessions.forEach { item -> PeriodRow(today, item, data, mark, noClass) }
-                        val rest = sessions.map { it.session.id }.filter { id -> todayEntries.none { it.sessionId == id } }.toSet()
+                        val heldSessions = sessions.filterNot { data.isNoClass(today, it.session.id) }
+                        val rest = heldSessions.map { it.session.id }.filter { id -> todayEntries.none { it.sessionId == id } }.toSet()
                         if (assumeMode) {
                             val cancelled = sessions.count { data.isNoClass(today, it.session.id) }
-                            val absent = sessions.count { s -> !data.isNoClass(today, s.session.id) && (todayEntries.firstOrNull { it.sessionId == s.session.id }?.mark ?: data.assumedMark(today, s.session)) == AttendanceMark.ABSENT }
-                            val later = sessions.count { s -> !data.isNoClass(today, s.session.id) && todayEntries.none { it.sessionId == s.session.id } && data.assumedMark(today, s.session) == null }
+                            val absent = sessions.count { s -> !data.isNoClass(today, s.session.id) && (todayEntries.firstOrNull { it.sessionId == s.session.id }?.mark ?: data.assumedMark(today, s.session, today, now.toLocalTime())) == AttendanceMark.ABSENT }
+                            val later = sessions.count { s -> !data.isNoClass(today, s.session.id) && todayEntries.none { it.sessionId == s.session.id } && data.assumedMark(today, s.session, today, now.toLocalTime()) == null }
                             Text("$absent absent · $cancelled no class · ${sessions.size - absent - cancelled - later} present" + (if (later > 0) " · $later later today" else ""), style = MaterialTheme.typography.bodySmall)
-                        } else Text("${sessions.size - rest.size} of ${sessions.size} marked · tap a chip again to clear", style = MaterialTheme.typography.bodySmall)
+                        } else Text("${heldSessions.size - rest.size} of ${heldSessions.size} held periods marked · tap a chip again to clear", style = MaterialTheme.typography.bodySmall)
                         if (!assumeMode && rest.isNotEmpty()) FilledTonalButton(onClick = { mark(today, rest, AttendanceMark.PRESENT) }, modifier = Modifier.fillMaxWidth()) { Text("Mark remaining ${rest.size} present") }
                     }
                 }

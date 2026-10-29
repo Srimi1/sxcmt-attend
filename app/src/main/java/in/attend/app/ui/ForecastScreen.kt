@@ -20,11 +20,14 @@ import java.time.format.DateTimeFormatter
 
 @Composable
 fun ForecastScreen(data: AppData, startingCounts: () -> Unit, calendar: () -> Unit) {
-    val base = data.baseline
+    val now = LocalAttendanceTime.current
+    val today = now.toLocalDate()
+    val tracking = data.tracking(today, now.toLocalTime())
+    val base = tracking.baseline
     var scenario by remember { mutableStateOf(Scenario.PLANNED_ABSENCES) }
-    var end by remember(base?.asOf) { mutableStateOf(LocalDate.now().plusMonths(3).coerceAtLeast(base?.asOf ?: LocalDate.now())) }
-    val result = remember(base, end, scenario, data.schedule, data.rules) {
-        base?.let { runCatching { ForecastEngine.forecast(it, end, scenario, data.schedule, data.rules) } }
+    var end by remember(base?.asOf) { mutableStateOf(today.plusMonths(3).coerceAtLeast(base?.asOf ?: today)) }
+    val result = remember(base, end, scenario, data.mySchedule, data.rules) {
+        base?.let { runCatching { data.forecast(it, end, scenario) } }
     }
     Page("Your attendance plan", "Forecast / based on your entries") {
         if (base == null) {
@@ -39,7 +42,7 @@ fun ForecastScreen(data: AppData, startingCounts: () -> Unit, calendar: () -> Un
             }
             if (result?.isFailure == true) InfoPanel("Check forecast date", result.exceptionOrNull()?.message ?: "Cannot calculate forecast")
             result?.getOrNull()?.let { forecast ->
-                val all = ForecastEngine.forecast(base, end, Scenario.ATTEND_ALL, data.schedule, data.rules)
+                val all = data.forecast(base, end, Scenario.ATTEND_ALL)
                 val missed = if (scenario == Scenario.PLANNED_ABSENCES) forecast.futureHeld - (forecast.futureAttended ?: 0.0).toInt() else null
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.extraLarge) {
                     Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -50,7 +53,7 @@ fun ForecastScreen(data: AppData, startingCounts: () -> Unit, calendar: () -> Un
                     }
                 }
                 if (missed != null) InfoPanel("${missed} planned missed periods", "With your plan: ${percent(forecast.percentage)}. Attend all: ${percent(all.percentage)}. Holidays and cancelled classes are excluded from both.")
-                if (data.tracking().unmarked > 0) InfoPanel("${data.tracking().unmarked} unmarked past periods", "Tracked totals include only your marked periods and starting counts. Complete your log for a more useful forecast.")
+                if (tracking.unmarked > 0) InfoPanel("${tracking.unmarked} unmarked past periods", "Tracked totals include only your marked periods and starting counts. Complete your log for a more useful forecast.")
                 OutlinedButton(onClick = calendar, modifier = Modifier.fillMaxWidth()) { Text("Edit absences in Calendar") }
                 AttendanceChart(forecast.points, data.targetBps / 100.0)
                 Text("Dashed line: ${targetLabel(data.targetBps)} target", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

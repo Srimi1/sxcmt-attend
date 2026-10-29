@@ -16,10 +16,11 @@ import java.time.LocalDate
 @Composable
 fun PeriodRow(date: LocalDate, item: DatedSession, data: AppData, mark: (LocalDate, Set<String>, AttendanceMark?) -> Unit,
               noClass: (LocalDate, WeekSession, Boolean) -> Unit) {
+    val now = LocalAttendanceTime.current
     val session = item.session
     val entry = data.entries.lastOrNull { it.date == date && it.sessionId == session.id }
     val cancelled = data.isNoClass(date, session.id)
-    val assumed = if (entry == null && !cancelled) data.assumedMark(date, session) else null
+    val assumed = if (entry == null && !cancelled) data.assumedMark(date, session, now.toLocalDate(), now.toLocalTime()) else null
     val shown = entry?.mark ?: assumed
     // Assumed marks: outlined in the accent colour on a plain background, so they read as "counted, not tapped".
     val assumedColors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.surface,

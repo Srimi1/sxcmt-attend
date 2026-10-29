@@ -12,15 +12,15 @@ data class RoutineVersion(
 data class ClassLink(val id: String, val name: String, val joinCode: String, val isOwner: Boolean = false)
 
 object Routines {
-    /** The timetable in force on [date]: the newest version already effective, else the earliest one waiting to start. */
+    /** The timetable in force on [date]: the newest version already effective. Future versions never apply early. */
     fun active(versions: List<RoutineVersion>, date: LocalDate): RoutineVersion? =
         versions.filter { it.effectiveFrom <= date }.maxByOrNull { it.version }
-            ?: versions.minByOrNull { it.effectiveFrom }
 
     /** A newer version scheduled to start after [date], if any. */
     fun upcoming(versions: List<RoutineVersion>, date: LocalDate): RoutineVersion? {
-        val current = active(versions, date) ?: return null
-        return versions.filter { it.effectiveFrom > date && it.version > current.version }.minByOrNull { it.effectiveFrom }
+        val current = active(versions, date)
+        return versions.filter { it.effectiveFrom > date && (current == null || it.version > current.version) }
+            .minWithOrNull(compareBy<RoutineVersion> { it.effectiveFrom }.thenByDescending { it.version })
     }
 
     /**

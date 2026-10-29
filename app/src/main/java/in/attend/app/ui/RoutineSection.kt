@@ -22,6 +22,7 @@ import java.time.format.DateTimeFormatter
 /** Settings section for the timetable shared with classmates. Attendance itself never leaves the phone. */
 @Composable
 fun ClassRoutineSection(data: AppData, demo: Boolean, model: AttendViewModel) {
+    val today = LocalAttendanceTime.current.toLocalDate()
     val account by model.account.collectAsStateWithLifecycle()
     val busy by model.busy.collectAsStateWithLifecycle()
     var signingIn by remember { mutableStateOf(false) }
@@ -48,10 +49,10 @@ fun ClassRoutineSection(data: AppData, demo: Boolean, model: AttendViewModel) {
             TextButton(onClick = model::signOut) { Text("Sign out") }
         }
         else -> {
-            val active = Routines.active(data.routineVersions, LocalDate.now())
-            val upcoming = Routines.upcoming(data.routineVersions, LocalDate.now())
-            data.pendingRoutine()?.let { PendingRoutineCard(it, model::acceptRoutine, model::dismissRoutine) }
-            InfoPanel(link.name, "Join code ${link.joinCode}\n" + (active?.let { "Version ${it.version} · in force from ${it.effectiveFrom.format(ShortDate)}" } ?: "No routine downloaded yet") +
+            val active = Routines.active(data.routineVersions, today)
+            val upcoming = Routines.upcoming(data.routineVersions, today)
+            data.pendingRoutine(today)?.let { PendingRoutineCard(it, model::acceptRoutine, model::dismissRoutine) }
+            InfoPanel(link.name, "Join code ${link.joinCode}\n" + (active?.let { "Version ${it.version} · in force from ${it.effectiveFrom.format(ShortDate)}" } ?: if (data.routineVersions.isNotEmpty()) "No routine is in force yet" else "No routine downloaded yet") +
                 (upcoming?.let { "\nVersion ${it.version} starts ${it.effectiveFrom.format(ShortDate)}" } ?: ""))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
@@ -73,7 +74,7 @@ fun ClassRoutineSection(data: AppData, demo: Boolean, model: AttendViewModel) {
     if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     if (signingIn) SignInDialog(model, busy) { signingIn = false }
     if (history) HistoryDialog(data, busy, { history = false }, { v -> model.acceptRoutine(v); history = false }) { v ->
-        model.publishRoutine(v.sessions, LocalDate.now(), "Restored version ${v.version}"); history = false
+        model.publishRoutine(v.sessions, today, "Restored version ${v.version}"); history = false
     }
     if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete class-sharing data?") },
         text = { Text("You leave every class, your account is removed from routine history and you are signed out. Timetables you published stay for classmates without your name. Attendance on this phone is not affected.") },

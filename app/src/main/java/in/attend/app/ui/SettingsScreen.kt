@@ -22,6 +22,8 @@ import java.util.UUID
 @Composable
 fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) -> Unit, clearData: () -> Unit, leaveDemo: () -> Unit,
                    publish: (List<WeekSession>) -> Unit, personal: @Composable ColumnScope.() -> Unit, routine: @Composable ColumnScope.() -> Unit) {
+    val now = LocalAttendanceTime.current
+    val base = data.tracking(now.toLocalDate(), now.toLocalTime()).baseline
     var target by remember(data.targetBps) { mutableStateOf((data.targetBps / 100.0).toString().removeSuffix(".0")) }
     var editing by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
@@ -39,7 +41,7 @@ fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) 
         Text("Teaching calendar", style = MaterialTheme.typography.titleLarge)
         Text("${data.schedule.size} sessions per week · Sunday off", style = MaterialTheme.typography.bodyMedium)
         OutlinedButton(onClick = { editing = true }, modifier = Modifier.fillMaxWidth()) { Text("Edit weekly timetable") }
-        DateButton("Teaching ends", data.teachingEnd ?: data.baseline?.termEnd ?: LocalDate.now().plusMonths(3), { date -> update { it.copy(teachingEnd = date) } }, Modifier.fillMaxWidth())
+        DateButton("Teaching ends", data.teachingEnd ?: base?.termEnd ?: now.toLocalDate().plusMonths(3), { date -> update { it.copy(teachingEnd = date) } }, Modifier.fillMaxWidth())
         if (data.teachingEnd != null) TextButton(onClick = { update { it.copy(teachingEnd = null) } }) { Text("Remove teaching end override") }
         InfoPanel("National holidays only", "Republic Day · 26 January\nIndependence Day · 15 August\nGandhi Jayanti · 2 October\nAdd other confirmed closures in Calendar.")
         HorizontalDivider()
@@ -70,6 +72,8 @@ fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) 
 
 @Composable
 private fun TimetableDialog(data: AppData, dismiss: () -> Unit, save: (List<WeekSession>) -> Unit) {
+    val now = LocalAttendanceTime.current
+    val base = data.tracking(now.toLocalDate(), now.toLocalTime()).baseline
     var sessions by remember { mutableStateOf(data.schedule) }
     var day by remember { mutableStateOf(DayOfWeek.MONDAY) }
     var editing by remember { mutableStateOf<WeekSession?>(null) }
@@ -93,7 +97,7 @@ private fun TimetableDialog(data: AppData, dismiss: () -> Unit, save: (List<Week
     }, confirmButton = { TextButton(enabled = data.classLink == null || Routines.validate(sessions) == null, onClick = { save(sessions) }) { Text(if (data.classLink != null) "Share with class" else "Save timetable") } }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
     if (adding || editing != null) {
         val original = editing
-        SessionDialog(day, original, sessions, data.baseline?.subjects.orEmpty(), { adding = false; editing = null }) { slot ->
+        SessionDialog(day, original, sessions, base?.subjects.orEmpty(), { adding = false; editing = null }) { slot ->
             sessions = sessions.filterNot { it.id == slot.id } + slot; adding = false; editing = null
         }
     }
@@ -101,7 +105,8 @@ private fun TimetableDialog(data: AppData, dismiss: () -> Unit, save: (List<Week
 
 @Composable
 private fun SessionDialog(day: DayOfWeek, original: WeekSession?, sessions: List<WeekSession>, imported: List<SubjectAttendance>, dismiss: () -> Unit, save: (WeekSession) -> Unit) {
-    val choices = (SeedTimetable.titles + imported.associate { it.code to it.name }).toList()
+    val choices = (SeedTimetable.titles + sessions.associate { it.subject to it.title } +
+        imported.associate { it.code to it.name }).toList()
     var subject by remember { mutableStateOf(original?.subject ?: choices.first().first) }
     var period by remember { mutableStateOf((original?.period ?: (1..12).first { p -> sessions.none { it.day == day && it.period == p } }).toString()) }
     var time by remember { mutableStateOf(original?.time ?: "09:00–09:50") }
