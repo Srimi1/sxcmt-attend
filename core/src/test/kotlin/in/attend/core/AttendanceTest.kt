@@ -8,66 +8,17 @@ import java.time.*
 
 class AttendanceTest : FunSpec({
     test("sheet totals use counts, not an average of percentages") {
-        val reports = listOf(
-            report("2026-07-13", "2026-07-31", 42, 54),
-            report("2026-08-01", "2026-08-31", 76, 86),
-            report("2026-09-01", "2026-09-30", 43, 45),
-        )
-        Ledger.baseline(reports.take(1))!!.counts shouldBe Counts(42, 54)
-        Ledger.baseline(reports.take(2))!!.counts shouldBe Counts(118, 140)
-        val total = Ledger.baseline(reports)!!.counts
+        // July 42/54, August 76/86, September 43/45 from the college monthly sheets.
+        val previous = Counts(42, 54) + Counts(76, 86)
+        previous shouldBe Counts(118, 140) // sheet column LAST ATT and the 140 held before September
+        val total = previous + Counts(43, 45)
         total shouldBe Counts(161, 185)
         total.percentage!! shouldBe (87.027027027 plusOrMinus 0.000001)
+        Counts(39, 185).percentage!! shouldBe (21.081081 plusOrMinus 0.00001)
     }
-    test("refresh replaces a reporting period rather than adding attendance twice") {
-        val original = report("2026-09-01", "2026-09-30", 42, 45)
-        val updated = report("2026-09-01", "2026-09-30", 43, 45)
-        val ledger = Ledger.merge(listOf(original), listOf(updated, updated))
-        ledger.size shouldBe 1
-        Ledger.baseline(ledger)!!.counts shouldBe Counts(43, 45)
-    }
-    test("cumulative total and months inside it are not added twice") {
-        val months = listOf(report("2026-08-01", "2026-08-31", 76, 86), report("2026-09-01", "2026-09-30", 43, 45))
-        val cumulative = report("2026-07-13", "2026-08-31", 118, 140, ReportKind.CUMULATIVE)
-        Ledger.baseline(months + cumulative)!!.counts shouldBe Counts(161, 185)
-    }
-    test("partially overlapping periods cannot corrupt totals") {
-        shouldThrow<IllegalArgumentException> {
-            Ledger.merge(listOf(report("2026-09-01", "2026-09-20", 10, 20)), listOf(report("2026-09-15", "2026-09-30", 12, 15)))
-        }
-        shouldThrow<IllegalArgumentException> {
-            Ledger.baseline(listOf(report("2026-07-13", "2026-09-15", 100, 120, ReportKind.CUMULATIVE), report("2026-09-01", "2026-09-30", 43, 45)))
-        }
-    }
-    test("different student or semester cannot inherit previous attendance") {
-        val old = report("2026-09-01", "2026-09-30", 43, 45)
-        val other = old.copy(profile = StudentProfile("Other student", "OTHER", "5"), counts = Counts(10, 45))
-        Ledger.merge(listOf(old), listOf(other)) shouldBe listOf(other)
-        Ledger.merge(listOf(old), listOf(old.copy(profile = old.profile.copy(semester = "6")))).size shouldBe 1
-    }
-    test("same local roll and semester from another student or programme remain isolated") {
-        val old = report("2026-09-01", "2026-09-30", 43, 45)
-        val other = old.copy(profile = old.profile.copy(name = "Different student"), counts = Counts(10, 45))
-        Ledger.merge(listOf(old), listOf(other)) shouldBe listOf(other)
-        (old.profile.copy(course = "BCA").termKey == old.profile.termKey) shouldBe false
-        (old.profile.copy(academicYear = "2027-28").termKey == old.profile.copy(academicYear = "2026-27").termKey) shouldBe false
-    }
-    test("missing optional identity metadata preserves existing history after a fresh matching profile") {
-        val old = report("2026-09-01", "2026-09-30", 43, 45).let { it.copy(profile = it.profile.copy(portalId = "ERP-ID", academicYear = "2026-27")) }
-        val fresh = old.copy(profile = StudentProfile("Sample student", "DEMO", "5"))
-        val merged = Ledger.merge(listOf(old), listOf(fresh))
-        merged.single().profile shouldBe old.profile
-        merged.single().counts shouldBe old.counts
-    }
-    test("month-to-date refresh extends the same reporting period without adding its prefix twice") {
-        val early = report("2026-09-01", "2026-09-15", 20, 22)
-        val full = report("2026-09-01", "2026-09-30", 43, 45)
-        Ledger.merge(listOf(early), listOf(full)) shouldBe listOf(full)
-        shouldThrow<IllegalArgumentException> { Ledger.merge(listOf(full), listOf(early)) }
-    }
-    test("conflicting same-period records in one import are rejected") {
-        val full = report("2026-09-01", "2026-09-30", 43, 45)
-        shouldThrow<IllegalArgumentException> { Ledger.merge(emptyList(), listOf(full, full.copy(counts = Counts(10, 45)))) }
+    test("a month total larger than the cumulative total is rejected") {
+        shouldThrow<IllegalArgumentException> { Baseline(Counts(40, 45), emptyList(), LocalDate.parse("2026-09-30"), month = Counts(43, 45)) }
+        Baseline(Counts(161, 185), emptyList(), LocalDate.parse("2026-09-30"), month = Counts(43, 45)).month shouldBe Counts(43, 45)
     }
     test("unknown attendance and impossible counts are handled explicitly") {
         Counts(0, 0).percentage shouldBe null
@@ -104,7 +55,6 @@ class AttendanceTest : FunSpec({
     }
     test("September scheduled total stays separate from 45 officially held") {
         TeachingCalendar.generate(LocalDate.parse("2026-09-01"), LocalDate.parse("2026-09-30"), SeedTimetable.sessions, emptyList()).size shouldBe 102
-        Ledger.baseline(listOf(report("2026-09-01", "2026-09-30", 43, 45)))!!.counts.held shouldBe 45L
     }
     test("only national holidays are automatic; festivals remain teaching days") {
         NationalHolidays.name(LocalDate.parse("2026-01-26")) shouldBe "Republic Day"
@@ -144,8 +94,3 @@ class AttendanceTest : FunSpec({
         shouldThrow<IllegalArgumentException> { ForecastEngine.forecast(base, base.asOf.minusDays(1), Scenario.ATTEND_ALL, SeedTimetable.sessions, emptyList()) }
     }
 })
-
-internal fun report(start: String, end: String, a: Long, h: Long, kind: ReportKind = ReportKind.PERIOD) = AttendanceSnapshot(
-    StudentProfile("Sample student", "DEMO", "5", "BBA IB"), LocalDate.parse(start), LocalDate.parse(end), kind,
-    Counts(a, h), emptyList(), Instant.parse("2026-10-17T10:00:00Z"), "https://erp.sxcpatna.edu.in/",
-)

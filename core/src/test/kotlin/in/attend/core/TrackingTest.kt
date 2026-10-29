@@ -4,6 +4,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.YearMonth
 
 class TrackingTest : FunSpec({
     val friday = LocalDate.parse("2026-10-23")
@@ -21,12 +22,12 @@ class TrackingTest : FunSpec({
         summarize(listOf(entry, entry.copy(mark = AttendanceMark.ABSENT))).baseline!!.counts shouldBe Counts(0, 1)
         summarize(emptyList()).baseline shouldBe null
     }
-    test("fresh ERP totals cover earlier student marks without duplication") {
+    test("newer sheet totals cover earlier student marks without duplication") {
         val entry = AttendanceEntry(friday, slots[0].id, AttendanceMark.ABSENT)
         val base = Baseline(Counts(80, 100), emptyList(), friday)
         summarize(listOf(entry), base).baseline shouldBe base
     }
-    test("student periods after ERP report add to baseline exactly once") {
+    test("student periods after the sheet date add to baseline exactly once") {
         val base = Baseline(Counts(80, 100), emptyList(), friday.minusDays(1))
         val summary = summarize(listOf(AttendanceEntry(friday, slots[0].id, AttendanceMark.PRESENT)), base)
         summary.baseline!!.counts shouldBe Counts(81, 101)
@@ -71,5 +72,17 @@ class TrackingTest : FunSpec({
         AttendanceTracker.sessionsOn(friday, listOf(entry), deleted, emptyList())
             .first { it.session.id == original.id }.session shouldBe original
         AttendanceTracker.sessionsOn(friday, emptyList(), deleted, emptyList()).size shouldBe slots.size - 1
+    }
+    test("monthly attendance uses the sheet month plus later marks; cumulative keeps running") {
+        val base = Baseline(Counts(161, 185), emptyList(), LocalDate.parse("2026-09-30"), month = Counts(43, 45))
+        val entries = listOf(AttendanceEntry(friday, slots[0].id, AttendanceMark.PRESENT), AttendanceEntry(friday, slots[1].id, AttendanceMark.ABSENT))
+        val summary = summarize(entries, base)
+        summary.month(YearMonth.of(2026, 9)) shouldBe Counts(43, 45)
+        summary.month(YearMonth.of(2026, 10)) shouldBe Counts(1, 2)
+        summary.baseline!!.counts shouldBe Counts(162, 187)
+    }
+    test("marks in the sheet month after its date extend that month") {
+        val base = Baseline(Counts(150, 170), emptyList(), friday.minusDays(1), month = Counts(30, 33))
+        summarize(listOf(AttendanceEntry(friday, slots[0].id, AttendanceMark.PRESENT)), base).month(YearMonth.from(friday)) shouldBe Counts(31, 34)
     }
 })

@@ -1,20 +1,17 @@
 package `in`.attend.app
 
-import android.webkit.CookieManager
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import `in`.attend.app.data.*
-import `in`.attend.app.portal.PortalSession
 import `in`.attend.core.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
 import java.time.*
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class RepositoryInstrumentedTest {
@@ -28,72 +25,48 @@ class RepositoryInstrumentedTest {
     @After fun close() { db.close() }
 
     @Test fun roomPersistsFullAttendanceAndCalendarState() = runBlocking {
-        val r = report()
         val rule = CalendarException("test", LocalDate.parse("2026-10-05"), LocalDate.parse("2026-10-06"), ExceptionKind.ABSENCE, "Planned leave", "1-1")
-        repo.importReports(listOf(r), "verified-schema", PortalPolicy.DASHBOARD)
-        repo.update { it.copy(rules = listOf(rule), targetBps = 8050, teachingEnd = LocalDate.parse("2026-12-10")) }
+        repo.update { it.copy(manualBaseline = sheet(), rules = listOf(rule), targetBps = 8050, teachingEnd = LocalDate.parse("2026-12-10"),
+            activity = listOf(ActivityEntry("a", LocalDate.parse("2026-10-10"), 30, "NSS")), lecturesPerHour = 2) }
         val saved = repo.data.first()
-        assertEquals(r, saved.reports.single())
+        assertEquals(sheet(), saved.manualBaseline)
         assertEquals(listOf(rule), saved.rules)
         assertEquals(8050, saved.targetBps)
+        assertEquals(2, saved.lecturesPerHour)
         assertEquals(LocalDate.parse("2026-12-10"), saved.baseline!!.termEnd)
         assertEquals(saved, StateCodec.decode(StateCodec.encode(saved)))
     }
-    @Test fun refreshIsIdempotentAndFailurePreservesSavedRecord() = runBlocking {
-        val r = report()
-        repo.importReports(listOf(r), "schema", PortalPolicy.DASHBOARD)
-        repo.importReports(listOf(r), "schema", PortalPolicy.DASHBOARD)
-        assertEquals(1, repo.data.first().reports.size)
-        val bad = r.copy(start = LocalDate.parse("2026-09-15"), end = LocalDate.parse("2026-10-05"))
-        assertTrue(runCatching { repo.importReports(listOf(bad), "schema", null) }.isFailure)
-        assertEquals(listOf(r), repo.data.first().reports)
+    @Test fun sheetSubjectsAndMonthTotalsSurviveSaving() = runBlocking {
+        repo.update { it.copy(manualBaseline = sheet()) }
+        val saved = repo.data.first().manualBaseline!!
+        assertEquals(Counts(43, 45), saved.month)
+        assertEquals(listOf(SubjectAttendance("RETAIL", "Retail Management", Counts(8, 9))), saved.subjects)
     }
-    @Test fun repeatedRollNumbersAndNewTermsClearPriorPersonalState() = runBlocking {
-        repo.importReports(listOf(report()), "old-layout", PortalPolicy.DASHBOARD)
-        repo.update { it.copy(rules = listOf(CalendarException("old", LocalDate.parse("2026-10-01"), LocalDate.parse("2026-10-01"), ExceptionKind.ABSENCE, "Private plan"))) }
-        val replacement = report().copy(profile = StudentProfile("Another student", "1", "5", "BCA"), counts = Counts(10, 45))
-        repo.importReports(listOf(replacement), "new-layout", PortalPolicy.DASHBOARD)
-        val saved = repo.data.first()
-        assertEquals(listOf(replacement), saved.reports)
-        assertEquals(CollegeCalendar.confirmedClosures, saved.rules)
-        assertEquals(setOf("new-layout"), saved.verifiedLayouts)
-        repo.forgetIfDifferent(replacement.profile.copy(semester = "6"))
-        assertNull(repo.data.first().profile)
-    }
-    @Test fun offlineReopenReadsSameRoomRecordsWithoutNetwork() = runBlocking {
+    @Test fun offlineReopenReadsSameRoomRecords() = runBlocking {
         val file = "attendance-offline-test.db"
         context.deleteDatabase(file)
         var persistent = Room.databaseBuilder(context, AttendDatabase::class.java, file).build()
-        AttendRepository(persistent).importReports(listOf(report()), "schema", PortalPolicy.DASHBOARD)
+        AttendRepository(persistent).update { it.copy(manualBaseline = sheet(), rules = emptyList()) }
         persistent.close()
         persistent = Room.databaseBuilder(context, AttendDatabase::class.java, file).build()
-        try { assertEquals(Counts(43, 45), AttendRepository(persistent).data.first().baseline!!.counts) }
+        try { assertEquals(Counts(161, 185), AttendRepository(persistent).data.first().sheetBaseline!!.counts) }
         finally { persistent.close(); context.deleteDatabase(file) }
     }
-    @Test fun logoutClearsRoomPersonalState() = runBlocking {
-        repo.importReports(listOf(report()), "schema", PortalPolicy.DASHBOARD)
+    @Test fun clearingRemovesAllPersonalState() = runBlocking {
+        repo.update { it.copy(manualBaseline = sheet(), activity = listOf(ActivityEntry("a", LocalDate.parse("2026-10-10"), 5, "Fest"))) }
         repo.clear()
         assertEquals(AppData(), repo.data.first())
     }
-    @Test fun missingOptionalIdentityMetadataCannotDeleteOfflineAttendance() = runBlocking {
-        val saved = report()
-        repo.importReports(listOf(saved), "schema", PortalPolicy.DASHBOARD)
-        repo.forgetIfDifferent(StudentProfile("Test student", "1", "5"))
-        assertEquals(saved, repo.data.first().reports.single())
-        repo.importReports(listOf(saved.copy(profile = StudentProfile("Test student", "1", "5"))), "schema", PortalPolicy.DASHBOARD)
-        assertEquals(saved, repo.data.first().reports.single())
-    }
-    @Test fun disconnectClearsSessionEvenBeforeFirstImport() {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val set = CountDownLatch(1)
-        instrumentation.runOnMainSync {
-            CookieManager.getInstance().setCookie(PortalPolicy.LOGIN, "ATTEND_TEST_SESSION=synthetic; Secure; Path=/") { set.countDown() }
-        }
-        assertTrue(set.await(10, TimeUnit.SECONDS))
-        val clear = CountDownLatch(1)
-        instrumentation.runOnMainSync { PortalSession.clear(context) { clear.countDown() } }
-        assertTrue(clear.await(10, TimeUnit.SECONDS))
-        instrumentation.runOnMainSync { assertFalse(CookieManager.getInstance().hasCookies()) }
+    @Test fun v021StateWithErpReportsStillOpens() {
+        val old = org.json.JSONObject(StateCodec.encode(AppData(manualBaseline = Baseline(Counts(80, 100), emptyList(), LocalDate.parse("2026-09-30")))))
+        old.put("reports", org.json.JSONArray().put(org.json.JSONObject().put("kind", "PERIOD")))
+            .put("verified", org.json.JSONArray().put("sig")).put("attendanceUrl", "https://example.invalid/").put("profileUrl", JSONObject.NULL)
+        listOf("activity", "lecturesPerHour").forEach(old::remove)
+        val migrated = StateCodec.decode(old.toString())
+        assertEquals(Counts(80, 100), migrated.manualBaseline!!.counts)
+        assertTrue(migrated.activity.isEmpty())
+        assertEquals(1, migrated.lecturesPerHour)
+        assertFalse(StateCodec.encode(migrated).contains("reports"))
     }
     @Test fun studentMarksPersistAndCorrectAnEarlierMarkWithoutCountingTwice() = runBlocking {
         val day = LocalDate.parse("2026-10-16")
@@ -116,23 +89,13 @@ class RepositoryInstrumentedTest {
         assertEquals(migrated, StateCodec.decode(StateCodec.encode(migrated)))
         assertTrue(StateCodec.decode(StateCodec.encode(migrated.copy(rules = emptyList()))).rules.isEmpty())
     }
-    @Test fun officialRefreshReplacesManualBaselineAndDoesNotDoubleCountCoveredMarks() = runBlocking {
-        val r = report()
-        repo.update { it.copy(manualBaseline = Baseline(Counts(1, 2), emptyList(), r.end.minusDays(1)), entries = listOf(AttendanceEntry(r.end, "1-1", AttendanceMark.PRESENT))) }
-        repo.importReports(listOf(r), "schema", PortalPolicy.LOGIN)
-        assertNull(repo.data.first().manualBaseline)
-        assertEquals(r.counts, repo.data.first().baseline!!.counts)
-    }
-    @Test fun manualFallbackOverridesSavedErpTotalsUntilNextVerifiedImport() = runBlocking {
-        val r = report()
-        repo.importReports(listOf(r), "schema", PortalPolicy.LOGIN)
-        val manual = Baseline(Counts(80, 100), emptyList(), r.end.plusDays(1))
-        repo.update { it.copy(manualBaseline = manual) }
-        assertEquals(manual, repo.data.first().reportBaseline)
-        assertEquals(r.profile, repo.data.first().profile)
-        assertEquals(listOf(r), repo.data.first().reports)
-        repo.importReports(listOf(r), "schema", PortalPolicy.LOGIN)
-        assertEquals(r.counts, repo.data.first().baseline!!.counts)
+    @Test fun newSheetSupersedesCoveredMarksWithoutDoubleCounting() = runBlocking {
+        val day = LocalDate.parse("2026-10-16")
+        val slot = SeedTimetable.sessions.first { it.day == day.dayOfWeek }
+        repo.update { it.copy(manualBaseline = Baseline(Counts(1, 2), emptyList(), day.minusDays(1)), rules = emptyList()).withMarks(day, setOf(slot.id), AttendanceMark.PRESENT) }
+        assertEquals(Counts(2, 3), repo.data.first().tracking(day).baseline!!.counts)
+        repo.update { it.copy(manualBaseline = Baseline(Counts(40, 50), emptyList(), day)) }
+        assertEquals(Counts(40, 50), repo.data.first().tracking(day).baseline!!.counts)
     }
     @Test fun correctingAndClearingHistoricalMarksPreservesOriginalSubjectAfterTimetableChanges() = runBlocking {
         val day = LocalDate.parse("2026-10-16")
@@ -162,10 +125,6 @@ class RepositoryInstrumentedTest {
         assertEquals(maxCounts, repo.data.first().baseline!!.counts)
         assertTrue(repo.data.first().entries.isEmpty())
     }
-    private fun report() = AttendanceSnapshot(
-        StudentProfile("Test student", "1", "5", "BBA IB", "TEST-ID", "2026-27"),
-        LocalDate.parse("2026-09-01"), LocalDate.parse("2026-09-30"), ReportKind.PERIOD, Counts(43, 45),
-        listOf(SubjectAttendance("RETAIL", "Retail Management", Counts(8, 9))),
-        Instant.parse("2026-10-17T10:00:00Z"), PortalPolicy.LOGIN,
-    )
+    private fun sheet() = Baseline(Counts(161, 185), listOf(SubjectAttendance("RETAIL", "Retail Management", Counts(8, 9))),
+        LocalDate.parse("2026-09-30"), month = Counts(43, 45))
 }

@@ -1,10 +1,14 @@
 package `in`.attend.core
 
 import java.time.LocalDate
+import java.time.YearMonth
 
 enum class AttendanceMark { PRESENT, ABSENT }
 data class AttendanceEntry(val date: LocalDate, val sessionId: String, val mark: AttendanceMark, val sessionSnapshot: WeekSession? = null)
-data class TrackingSummary(val baseline: Baseline?, val studentCounts: Counts, val unmarked: Int)
+data class TrackingSummary(val baseline: Baseline?, val studentCounts: Counts, val unmarked: Int, val monthly: Map<YearMonth, Counts> = emptyMap()) {
+    /** Calendar-month attendance: the sheet's month total for the baseline month plus marks after it. */
+    fun month(month: YearMonth): Counts? = monthly[month]
+}
 
 object CollegeCalendar {
     // College dates confirmed by the student. This is not an inferred festival calendar.
@@ -56,6 +60,10 @@ object AttendanceTracker {
                 .count { (it.date to it.session.id) !in marked }
             cursor = end.plusDays(1)
         }
-        return TrackingSummary(combined, added, unmarked)
+        val monthly = valid.groupBy { YearMonth.from(it.date) }.mapValues { (_, items) ->
+            Counts(items.count { it.mark == AttendanceMark.PRESENT }.toLong(), items.size.toLong())
+        }.toMutableMap()
+        base?.month?.let { sheet -> val m = YearMonth.from(base.asOf); monthly[m] = sheet + (monthly[m] ?: Counts(0, 0)) }
+        return TrackingSummary(combined, added, unmarked, monthly)
     }
 }

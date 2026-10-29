@@ -34,7 +34,7 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
     val teachingEnd = data.teachingEnd ?: data.baseline?.termEnd
     val sessions = AttendanceTracker.sessionsOn(selected, data.entries, data.schedule, data.rules, teachingEnd)
     val pastOrToday = selected <= LocalDate.now()
-    val covered = data.reportBaseline?.asOf?.let { selected <= it } == true
+    val covered = data.sheetBaseline?.asOf?.let { selected <= it } == true
     val dayEntries = data.entries.filter { it.date == selected && it.sessionId in sessions.map { s -> s.session.id } }
     val closed = data.rules.filter { it.kind == ExceptionKind.CLOSURE && selected in it.start..it.end }
     fun record(ids: Set<String>, value: AttendanceMark?) {
@@ -80,7 +80,7 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
         Text("${selected.format(ShortDate)} · ${sessions.size} scheduled", style = MaterialTheme.typography.titleMedium)
         closed.forEach { InfoPanel(it.label, "College closed. No held classes and no absence penalty. Reopens after ${it.end.format(ShortDate)}.") }
         feedback?.let { InfoPanel("Saved", it) }
-        if (covered) InfoPanel("Covered by starting counts", "This date is already included in your ERP or manually entered totals. Mark periods after ${data.reportBaseline!!.asOf.format(ShortDate)} to avoid double counting.")
+        if (covered) InfoPanel("Covered by your sheet numbers", "This date is already included in the college sheet totals you entered. Mark periods after ${data.sheetBaseline!!.asOf.format(ShortDate)} to avoid double counting.")
         else if (pastOrToday && sessions.isNotEmpty()) {
             Text("${dayEntries.count { it.mark == AttendanceMark.PRESENT }} present · ${dayEntries.count { it.mark == AttendanceMark.ABSENT }} absent · ${sessions.size - dayEntries.size} unmarked", style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

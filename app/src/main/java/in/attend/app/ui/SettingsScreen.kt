@@ -20,7 +20,8 @@ import java.time.LocalDate
 import java.util.UUID
 
 @Composable
-fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) -> Unit, connect: () -> Unit, logout: () -> Unit, leaveDemo: () -> Unit) {
+fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) -> Unit, clearData: () -> Unit, leaveDemo: () -> Unit,
+                   publish: (List<WeekSession>) -> Unit, routine: @Composable ColumnScope.() -> Unit) {
     var target by remember(data.targetBps) { mutableStateOf((data.targetBps / 100.0).toString().removeSuffix(".0")) }
     var editing by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
@@ -40,19 +41,29 @@ fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) 
         if (data.teachingEnd != null) TextButton(onClick = { update { it.copy(teachingEnd = null) } }) { Text("Remove teaching end override") }
         InfoPanel("National holidays only", "Republic Day · 26 January\nIndependence Day · 15 August\nGandhi Jayanti · 2 October\nAdd other confirmed closures in Calendar.")
         HorizontalDivider()
-        Text("College connection", style = MaterialTheme.typography.titleLarge)
-        Text("SXCMT ERP · Session kept on this device. Refresh when you choose.", style = MaterialTheme.typography.bodyMedium)
-        Button(onClick = connect, modifier = Modifier.fillMaxWidth()) { Text(if (data.profile == null || demo) "Connect college ERP" else "Open / refresh ERP") }
+        routine()
+        HorizontalDivider()
+        Text("Activity credit", style = MaterialTheme.typography.titleLarge)
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Lectures per activity hour: ${data.lecturesPerHour}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(enabled = data.lecturesPerHour > 1, onClick = { update { it.copy(lecturesPerHour = it.lecturesPerHour - 1) } }) { Text("−") }
+            OutlinedButton(enabled = data.lecturesPerHour < 10, onClick = { update { it.copy(lecturesPerHour = it.lecturesPerHour + 1) } }) { Text("+") }
+        }
+        Text("Default 1. Change only if the college confirms a different conversion.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider()
+        Text("Your data", style = MaterialTheme.typography.titleLarge)
         if (demo) {
             OutlinedButton(onClick = leaveDemo, modifier = Modifier.fillMaxWidth()) { Text("Leave sample preview") }
         } else {
-            OutlinedButton(onClick = { confirmLogout = true }, modifier = Modifier.fillMaxWidth()) { Text("Disconnect ERP / clear personal data") }
+            OutlinedButton(onClick = { confirmLogout = true }, modifier = Modifier.fillMaxWidth()) { Text("Clear my attendance data") }
         }
-        Text("Your password is entered into the official ERP page. Attend does not read it or store a separate copy. Session and attendance stay on this device; app backups are disabled.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("Attend 0.2.0 · Student attendance tracker\nUse your phone's password manager to save ERP credentials. The college controls session expiry. Login alone does not confirm an attendance import.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Attend 0.3.0 · Self-service attendance tracker. Marks, sheet numbers and activity hours stay on this device; app backups are disabled.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    if (editing) TimetableDialog(data, { editing = false }) { sessions -> update { it.copy(schedule = sessions) }; editing = false }
-    if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false }, title = { Text("Sign out?") }, text = { Text("This clears the ERP session, imported identity, attendance and calendar changes on this device.") }, confirmButton = { TextButton(onClick = { confirmLogout = false; logout() }) { Text("Sign out") } }, dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Cancel") } })
+    if (editing) TimetableDialog(data, { editing = false }) { sessions ->
+        if (data.classLink != null && !demo) publish(sessions) else update { it.copy(schedule = sessions) }
+        editing = false
+    }
+    if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false }, title = { Text("Clear all data?") }, text = { Text("This deletes your sheet numbers, period marks, activity hours, timetable edits and calendar changes from this device. It cannot be undone.") }, confirmButton = { TextButton(onClick = { confirmLogout = false; clearData() }) { Text("Clear") } }, dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Cancel") } })
 }
 
 @Composable
@@ -75,8 +86,9 @@ private fun TimetableDialog(data: AppData, dismiss: () -> Unit, save: (List<Week
             }
             TextButton(enabled = sessions.count { it.day == day } < 12, onClick = { adding = true }) { Text("+ Add session") }
             TextButton(onClick = { sessions = SeedTimetable.sessions }) { Text("Reset to supplied BBA IB timetable") }
+            if (data.classLink != null) Routines.validate(sessions)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
-    }, confirmButton = { TextButton(onClick = { save(sessions) }) { Text("Save timetable") } }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
+    }, confirmButton = { TextButton(enabled = data.classLink == null || Routines.validate(sessions) == null, onClick = { save(sessions) }) { Text(if (data.classLink != null) "Share with class" else "Save timetable") } }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
     if (adding || editing != null) {
         val original = editing
         SessionDialog(day, original, sessions, data.baseline?.subjects.orEmpty(), { adding = false; editing = null }) { slot ->
