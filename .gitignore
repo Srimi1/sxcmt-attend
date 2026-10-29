@@ -5,6 +5,8 @@ local.properties
 *.iml
 .idea/
 artifacts/*.apk
+artifacts/v0.2.0/*.apk
+artifacts/v0.2.1/*.apk
 artifacts/*.png
 !artifacts/Attend-0.1.0-debug.apk
 !artifacts/welcome.png
@@ -19,3 +21,4 @@ __pycache__/
 *.jks
 .DS_Store
 .android-avd/
+Attend-*.patch

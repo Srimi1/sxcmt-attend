@@ -1,86 +1,84 @@
 package `in`.attend.app.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import `in`.attend.app.data.AppData
-import `in`.attend.core.AttendanceMath
-import java.time.*
-import java.time.temporal.ChronoUnit
+import `in`.attend.core.*
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @Composable
-fun Dashboard(data: AppData, demo: Boolean, connect: () -> Unit, preview: () -> Unit, forecast: () -> Unit) {
-    val profile = data.profile
-    val base = data.baseline
-    Page(if (profile == null) "A little planning.\nA lot less worry." else "Your attendance\nat a glance.", "Attend / ${if (demo) "Sample preview" else "College companion"}", action = {
-        if (profile != null) IconButton(onClick = connect) { Icon(Icons.Default.Refresh, "Refresh ERP") }
+fun Dashboard(data: AppData, demo: Boolean, connect: () -> Unit, preview: () -> Unit,
+              forecast: () -> Unit, calendar: () -> Unit, startingCounts: () -> Unit) {
+    val today = LocalDate.now()
+    val tracking = data.tracking(today)
+    val base = tracking.baseline
+    val sessions = AttendanceTracker.sessionsOn(today, data.entries, data.schedule, data.rules, data.teachingEnd)
+    val marked = sessions.count { s -> data.entries.any { it.date == today && it.sessionId == s.session.id } }
+    val closure = data.rules.firstOrNull { it.kind == ExceptionKind.CLOSURE && today in it.start..it.end }
+    Page("Your attendance", "ATTEND  /  ${today.format(ShortDate)}", action = {
+        IconButton(onClick = connect) { Icon(Icons.Default.CloudSync, "Open college ERP") }
     }) {
-        if (profile == null || base == null) {
-            ConnectPrompt(connect)
-            OutlinedButton(onClick = preview, modifier = Modifier.fillMaxWidth()) { Text("Explore with sample data") }
-            InfoPanel("Ready for your week", "24 scheduled sessions · Sunday off\nOnly Republic Day, Independence Day and Gandhi Jayanti are automatic holidays.")
-            Text("01  Connect ERP\n02  Check your class calendar\n03  Plan your next few months", style = MaterialTheme.typography.bodyLarge, lineHeight = 36.sp)
-        } else {
-            if (demo) InfoPanel("DEMO — sample data", "This preview uses an anonymized example from your sheets. Nothing here is a live ERP import.")
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(profile.name, style = MaterialTheme.typography.titleLarge)
-                Text("Roll ${profile.rollNumber} · Semester ${profile.semester}${if (profile.course.isNotBlank()) " · ${profile.course}" else ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Surface(color = Forest, contentColor = Color.White, shape = RoundedCornerShape(28.dp)) {
-                Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("RECORDED ATTENDANCE", style = MaterialTheme.typography.labelSmall, color = Lime)
-                    Text(percent(base.counts.percentage), fontSize = 54.sp, fontWeight = FontWeight.Light, letterSpacing = (-2).sp)
-                    Text("${base.counts.attended} attended / ${base.counts.held} held", color = Color(0xFFDCE7DD))
-                    LinearProgressIndicator(progress = { ((base.counts.percentage ?: 0.0) / 100).toFloat() }, modifier = Modifier.fillMaxWidth().height(5.dp), color = Lime, trackColor = Color.White.copy(alpha = .16f))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Through ${base.asOf.format(ShortDate)}", style = MaterialTheme.typography.bodySmall)
-                        Text("Target ${targetLabel(data.targetBps)}", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-            if (base.counts.held > 0) {
-                val recovery = AttendanceMath.recoveryClasses(base.counts, data.targetBps)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Stat("${AttendanceMath.missAllowance(base.counts, data.targetBps)}", "classes you can miss now", Modifier.weight(1f))
-                    Stat(recovery?.toString() ?: "∞", "classes to reach target", Modifier.weight(1f))
-                }
-            }
-            val unreported = ChronoUnit.DAYS.between(base.asOf, LocalDate.now()).coerceAtLeast(0)
-            if (unreported > 0) InfoPanel("$unreported days since this report", "Classes after ${base.asOf.format(ShortDate)} are unreported. Forecasts estimate this gap; recorded attendance stays unchanged.")
-            Button(onClick = forecast, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text("See my forecast") }
-            if (base.subjects.isNotEmpty()) {
-                Text("Subject breakdown", style = MaterialTheme.typography.titleLarge)
-                base.subjects.forEach { subject ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(subject.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                            Text(percent(subject.counts.percentage), style = MaterialTheme.typography.labelLarge)
+        if (demo) InfoPanel("DEMO — sample data", "Sample figures only. Leave this preview in Settings to save your own attendance.")
+        if (base != null) {
+            val personal = tracking.studentCounts.held > 0 || data.manualBaseline != null || data.reports.isEmpty()
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(if (personal) "YOUR TRACKED ATTENDANCE" else "ERP ATTENDANCE", style = MaterialTheme.typography.labelSmall)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                        Box(contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(progress = { ((base.counts.percentage ?: 0.0) / 100).toFloat() }, modifier = Modifier.size(92.dp), strokeWidth = 8.dp, trackColor = MaterialTheme.colorScheme.surface)
+                            Text(percent(base.counts.percentage), style = MaterialTheme.typography.titleLarge)
                         }
-                        LinearProgressIndicator(progress = { ((subject.counts.percentage ?: 0.0) / 100).toFloat() }, modifier = Modifier.fillMaxWidth().height(4.dp), color = if ((subject.counts.percentage ?: 0.0) >= data.targetBps / 100.0) MaterialTheme.colorScheme.primary else Amber)
-                        Text("${subject.counts.attended} / ${subject.counts.held} classes", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text("${base.counts.attended} / ${base.counts.held} classes", style = MaterialTheme.typography.titleLarge)
+                            Text("Target ${targetLabel(data.targetBps)}", style = MaterialTheme.typography.bodyMedium)
+                            Text(if (personal) "Starting counts and marked periods" else "Report through ${base.asOf.format(ShortDate)}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (base.counts.held > 0) {
+                        val recovery = AttendanceMath.recoveryClasses(base.counts, data.targetBps)
+                        Text(if (recovery == 0L) "${AttendanceMath.missAllowance(base.counts, data.targetBps)} more classes can be missed at this target." else "Attend ${recovery ?: "all remaining"} classes to reach your target.", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
-            val fetched = data.reports.maxOf { it.fetchedAt }.atZone(ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a"))
-            Text("${if (demo) "Sample timestamp" else "Last successful refresh"}: $fetched", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            InfoPanel("Scheduled ≠ recorded", "Timetable predicts classes that could be held. Only ERP counts establish recorded attendance; cancelled classes and closures can create differences.")
+        } else {
+            InfoPanel("Start with today's periods", "Mark present or absent in Calendar. Your counter and forecast update as you log classes. ERP connection is optional.")
         }
-    }
-}
-
-@Composable
-private fun Stat(value: String, label: String, modifier: Modifier) {
-    Column(modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(20.dp)).padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(value, style = MaterialTheme.typography.headlineMedium)
-        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Today", style = MaterialTheme.typography.titleLarge)
+                Text(closure?.label ?: if (sessions.isEmpty()) "No classes scheduled" else "$marked of ${sessions.size} periods marked", style = MaterialTheme.typography.bodyMedium)
+                Button(onClick = calendar, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Icon(Icons.Default.EditCalendar, null); Spacer(Modifier.width(8.dp)); Text("Log attendance")
+                }
+            }
+        }
+        if (tracking.unmarked > 0 && base != null) InfoPanel("${tracking.unmarked} periods still unmarked", "Unmarked periods are excluded from your tracked count. We never assume you were present.")
+        Button(onClick = forecast, modifier = Modifier.fillMaxWidth()) { Text("View my forecast") }
+        OutlinedButton(onClick = startingCounts, modifier = Modifier.fillMaxWidth()) { Text(if (data.manualBaseline == null) "Add starting counts" else "Edit starting counts") }
+        OutlinedButton(onClick = connect, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Link, null); Spacer(Modifier.width(8.dp)); Text(if (data.reports.isEmpty()) "Connect college ERP" else "Open / refresh ERP") }
+        Text(if (data.reports.isEmpty()) "Self-reported attendance stays on this device. Connecting ERP alone does not import a report." else "${data.profile?.name} · ${if (data.manualBaseline != null) "Manual starting counts" else "ERP report"} through ${data.reportBaseline?.asOf?.format(ShortDate)}. Student logs after that date are added separately.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (base != null && base.subjects.isNotEmpty()) {
+            Text("Subject breakdown", style = MaterialTheme.typography.titleLarge)
+            base.subjects.forEach { subject ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(subject.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    Text("${subject.counts.attended} / ${subject.counts.held} · ${percent(subject.counts.percentage)}", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+        data.reports.maxOfOrNull { it.fetchedAt }?.let { fetched ->
+            val time = fetched.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a"))
+            Text("${if (demo) "Sample timestamp" else "Last successful ERP refresh"}: $time", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (base == null) TextButton(onClick = preview) { Text("Explore with sample data") }
     }
 }

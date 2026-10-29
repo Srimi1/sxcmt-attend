@@ -1,5 +1,21 @@
 # Attendance Predictor v0.1
 
+## Publication corrections — v0.2.1, 29 October 2026
+
+Historical marks remain visible and correctable after timetable edits or deletions, retaining their original subject snapshots. Older reporting dates remain readable without applying the forecast's ten-year limit to stored history. Validate combined totals before changing either persistent or sample state.
+
+Explicitly saved manual starting counts take precedence over cached ERP totals until the next verified ERP import; preserve the cached reports for account isolation and history. Explain this choice when entering counts. Show available subject counts and distinguish the report date from the last successful ERP refresh timestamp on the dashboard.
+
+## Student review update — v0.2, 20 October 2026
+
+Student-entered period attendance is the main workflow. Completed periods accept Present / Absent / Clear; unmarked periods stay unknown. Future period absences affect planning only. Counters update immediately and marks persist offline. Optional starting counts and verified ERP totals establish a baseline; official refreshes supersede student marks on covered dates without double counting. Timetable edits preserve snapshots of already marked periods.
+
+Use My plan as the default forecast and show its planned missed-period count and attend-all comparison. Planned absences also override expected attendance in the current-rate scenario. Holidays and cancellations remove held sessions rather than penalizing attendance. The college confirmed 17–21 October 2026 as the Navratri closure, reopening 22 October; include this once when upgrading older local state, while honoring subsequent edits/removal.
+
+Keep ERP sessions on-device, expose Android Autofill, and keep refresh user-initiated so returning to the app shows attendance. Explain sign-in, opening an attendance report and importing it as separate stages. Discover actual profile/attendance links instead of guessing dashboard routes. Read dynamic visible content again periodically, and offer manual count entry when a layout is unsupported. Native password copying is not part of this update; real password-manager saving and authenticated ERP import still require phone verification.
+
+The requirements below describe the original release. Where they conflict, this student review update takes precedence.
+
 ## Accepted behavior
 
 Native Android 8+ application, written in Kotlin with Jetpack Compose / Material 3 and Room. Data stays on device. Deliver an installable test APK without a backend or separate app account.

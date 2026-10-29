@@ -5,7 +5,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
@@ -25,8 +24,8 @@ private val Dark = darkColorScheme(primary = Color(0xFFA8D2B4), onPrimary = Ink,
 @Composable
 fun AttendTheme(content: @Composable () -> Unit) {
     val typography = Typography(
-        headlineLarge = TextStyle(fontFamily = FontFamily.Serif, fontSize = 36.sp, lineHeight = 42.sp),
-        headlineMedium = TextStyle(fontFamily = FontFamily.Serif, fontSize = 28.sp, lineHeight = 34.sp),
+        headlineLarge = TextStyle(fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold),
+        headlineMedium = TextStyle(fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold),
         titleLarge = TextStyle(fontSize = 21.sp, fontWeight = FontWeight.Medium),
         titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Medium),
         bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),

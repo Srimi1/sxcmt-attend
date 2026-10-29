@@ -55,7 +55,7 @@ class RepositoryInstrumentedTest {
         repo.importReports(listOf(replacement), "new-layout", PortalPolicy.DASHBOARD)
         val saved = repo.data.first()
         assertEquals(listOf(replacement), saved.reports)
-        assertTrue(saved.rules.isEmpty())
+        assertEquals(CollegeCalendar.confirmedClosures, saved.rules)
         assertEquals(setOf("new-layout"), saved.verifiedLayouts)
         repo.forgetIfDifferent(replacement.profile.copy(semester = "6"))
         assertNull(repo.data.first().profile)
@@ -94,6 +94,73 @@ class RepositoryInstrumentedTest {
         instrumentation.runOnMainSync { PortalSession.clear(context) { clear.countDown() } }
         assertTrue(clear.await(10, TimeUnit.SECONDS))
         instrumentation.runOnMainSync { assertFalse(CookieManager.getInstance().hasCookies()) }
+    }
+    @Test fun studentMarksPersistAndCorrectAnEarlierMarkWithoutCountingTwice() = runBlocking {
+        val day = LocalDate.parse("2026-10-16")
+        val slots = SeedTimetable.sessions.filter { it.day == DayOfWeek.FRIDAY }
+        repo.update { it.copy(manualBaseline = Baseline(Counts(75, 100), emptyList(), day.minusDays(1)),
+            entries = listOf(AttendanceEntry(day, slots[0].id, AttendanceMark.PRESENT, slots[0]), AttendanceEntry(day, slots[1].id, AttendanceMark.ABSENT, slots[1]))) }
+        val saved = repo.data.first()
+        assertEquals(Counts(76, 102), saved.tracking(day).baseline!!.counts)
+        assertEquals(saved, StateCodec.decode(StateCodec.encode(saved)))
+        repo.update { it.copy(entries = it.entries.filterNot { e -> e.sessionId == slots[1].id } + AttendanceEntry(day, slots[1].id, AttendanceMark.PRESENT)) }
+        assertEquals(Counts(77, 102), repo.data.first().tracking(day).baseline!!.counts)
+        repo.clear()
+        assertTrue(repo.data.first().entries.isEmpty())
+    }
+    @Test fun oldStateAddsConfirmedClosureOnceAndHonorsLaterRemoval() {
+        val old = org.json.JSONObject(StateCodec.encode(AppData(rules = emptyList())))
+        listOf("calendarRevision", "entries", "manualBaseline", "trackingStarted").forEach(old::remove)
+        val migrated = StateCodec.decode(old.toString())
+        assertEquals(CollegeCalendar.confirmedClosures, migrated.rules)
+        assertEquals(migrated, StateCodec.decode(StateCodec.encode(migrated)))
+        assertTrue(StateCodec.decode(StateCodec.encode(migrated.copy(rules = emptyList()))).rules.isEmpty())
+    }
+    @Test fun officialRefreshReplacesManualBaselineAndDoesNotDoubleCountCoveredMarks() = runBlocking {
+        val r = report()
+        repo.update { it.copy(manualBaseline = Baseline(Counts(1, 2), emptyList(), r.end.minusDays(1)), entries = listOf(AttendanceEntry(r.end, "1-1", AttendanceMark.PRESENT))) }
+        repo.importReports(listOf(r), "schema", PortalPolicy.LOGIN)
+        assertNull(repo.data.first().manualBaseline)
+        assertEquals(r.counts, repo.data.first().baseline!!.counts)
+    }
+    @Test fun manualFallbackOverridesSavedErpTotalsUntilNextVerifiedImport() = runBlocking {
+        val r = report()
+        repo.importReports(listOf(r), "schema", PortalPolicy.LOGIN)
+        val manual = Baseline(Counts(80, 100), emptyList(), r.end.plusDays(1))
+        repo.update { it.copy(manualBaseline = manual) }
+        assertEquals(manual, repo.data.first().reportBaseline)
+        assertEquals(r.profile, repo.data.first().profile)
+        assertEquals(listOf(r), repo.data.first().reports)
+        repo.importReports(listOf(r), "schema", PortalPolicy.LOGIN)
+        assertEquals(r.counts, repo.data.first().baseline!!.counts)
+    }
+    @Test fun correctingAndClearingHistoricalMarksPreservesOriginalSubjectAfterTimetableChanges() = runBlocking {
+        val day = LocalDate.parse("2026-10-16")
+        val slot = SeedTimetable.sessions.first { it.day == day.dayOfWeek }
+        repo.update { it.withMarks(day, setOf(slot.id), AttendanceMark.PRESENT) }
+        repo.update { data -> data.copy(schedule = data.schedule.map { if (it.id == slot.id) it.copy(subject = "NEW", title = "Changed") else it }) }
+        repo.update { it.withMarks(day, setOf(slot.id), AttendanceMark.ABSENT) }
+        var saved = repo.data.first()
+        assertEquals(slot, saved.entries.single().sessionSnapshot)
+        assertEquals(slot.subject, saved.tracking(day).baseline!!.subjects.single().code)
+        repo.update { data -> data.copy(schedule = data.schedule.filterNot { it.id == slot.id }) }
+        repo.update { it.withMarks(day, setOf(slot.id), AttendanceMark.PRESENT) }
+        saved = repo.data.first()
+        assertEquals(slot, saved.entries.single().sessionSnapshot)
+        assertEquals(Counts(1, 1), saved.tracking(day).baseline!!.counts)
+        assertEquals(saved, StateCodec.decode(StateCodec.encode(saved)))
+        repo.update { it.withMarks(day, setOf(slot.id), null) }
+        assertTrue(repo.data.first().entries.isEmpty())
+        assertNull(repo.data.first().tracking(day).baseline)
+    }
+    @Test fun invalidCombinedCountsCannotPersistAnUnreadableState() = runBlocking {
+        val day = LocalDate.parse("2026-10-16")
+        val slot = SeedTimetable.sessions.first { it.day == day.dayOfWeek }
+        val maxCounts = Counts(10_000_000, 10_000_000)
+        repo.update { it.copy(manualBaseline = Baseline(maxCounts, emptyList(), day.minusDays(1)), rules = emptyList()) }
+        assertTrue(runCatching { repo.update { it.withMarks(day, setOf(slot.id), AttendanceMark.PRESENT) } }.isFailure)
+        assertEquals(maxCounts, repo.data.first().baseline!!.counts)
+        assertTrue(repo.data.first().entries.isEmpty())
     }
     private fun report() = AttendanceSnapshot(
         StudentProfile("Test student", "1", "5", "BBA IB", "TEST-ID", "2026-27"),

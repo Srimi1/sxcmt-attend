@@ -34,13 +34,13 @@ sealed interface PortalResult {
 /** Conservative label-based prototype. Live ERP support requires student verification of an import. */
 object PortalParser {
     private fun norm(s: String) = s.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "")
-    private val heldLabels = setOf("totalclasses", "totalclassesheld", "classesheld", "held", "conducted", "totallectures", "totalperiods")
-    private val attendedLabels = setOf("attended", "present", "classesattended", "totalpresent", "attendedclasses", "lecturesattended")
+    private val heldLabels = setOf("totalclasses", "totalclassesheld", "classesheld", "held", "conducted", "totallectures", "totalperiods", "conductedclasses", "classesconducted", "totalclassesconducted")
+    private val attendedLabels = setOf("attended", "present", "classesattended", "totalpresent", "attendedclasses", "lecturesattended", "presentclasses", "classespresent", "totalclassesattended")
     private val subjectLabels = setOf("subject", "subjectname", "course", "coursename", "paper", "papername")
     private val dateToken = "(?:\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{4})"
     private val rangeRegex = Regex("($dateToken)\\s*(?:to|–|—|-)\\s*($dateToken)", RegexOption.IGNORE_CASE)
-    private val dateFormats = listOf("uuuu-MM-dd", "d/M/uuuu", "d-M-uuuu", "d.M.uuuu").map {
-        DateTimeFormatter.ofPattern(it).withResolverStyle(ResolverStyle.STRICT)
+    private val dateFormats = listOf("uuuu-MM-dd", "d/M/uuuu", "d-M-uuuu", "d.M.uuuu", "d MMM uuuu", "d-MMM-uuuu", "d MMMM uuuu").map {
+        DateTimeFormatter.ofPattern(it, Locale.ENGLISH).withResolverStyle(ResolverStyle.STRICT)
     }
     fun date(text: String): LocalDate? = dateFormats.firstNotNullOfOrNull { f -> runCatching { LocalDate.parse(text.trim(), f) }.getOrNull() }
 
@@ -56,7 +56,7 @@ object PortalParser {
         }
         fun field(vararg labels: String): String? = labels.firstNotNullOfOrNull { fields[norm(it)]?.takeIf { v -> v.isNotBlank() } }
         val name = field("Student Name", "Name of Student", "Name")
-        val roll = field("Roll Number", "Roll No", "Roll")
+        val roll = field("Roll Number", "Roll No", "Roll", "Class Roll No")
         val semester = field("Semester", "Current Semester", "Sem")
         val ownProfile = if (name != null && roll != null && semester != null) {
             StudentProfile(name.take(200), roll.take(100), semester.take(100), field("Programme", "Program", "Course")?.take(200).orEmpty(),

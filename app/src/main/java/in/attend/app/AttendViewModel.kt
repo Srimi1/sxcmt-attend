@@ -12,7 +12,6 @@ import java.time.*
 data class AttendUiState(val data: AppData = AppData(), val isDemo: Boolean = false, val loaded: Boolean = false)
 
 class AttendViewModel(application: Application) : AndroidViewModel(application) {
-    var openingRefreshHandled = false
     private val repository = (application as AttendApplication).repository
     private val demoData = MutableStateFlow<AppData?>(null)
     val ui = combine(repository.data, demoData) { real, demo -> AttendUiState(demo ?: real, demo != null, true) }
@@ -20,11 +19,20 @@ class AttendViewModel(application: Application) : AndroidViewModel(application) 
     val notice = MutableStateFlow<String?>(null)
     fun update(transform: (AppData) -> AppData) {
         val demo = demoData.value
-        if (demo != null) { demoData.value = transform(demo); return }
+        if (demo != null) {
+            runCatching { transform(demo).also { it.baseline } }
+                .onSuccess { demoData.value = it }
+                .onFailure { notice.value = it.message ?: "Could not save changes" }
+            return
+        }
         viewModelScope.launch { runCatching { repository.update(transform) }.onFailure { notice.value = it.message ?: "Could not save changes" } }
     }
     fun showDemo() { demoData.value = sampleData() }
     fun leaveDemo() { demoData.value = null }
+    fun mark(date: LocalDate, sessionIds: Set<String>, mark: AttendanceMark?) {
+        if (date > LocalDate.now()) return
+        update { old -> old.withMarks(date, sessionIds, mark) }
+    }
     fun accept(reports: List<AttendanceSnapshot>, signature: String, profileUrl: String?, done: () -> Unit, failed: (String) -> Unit = {}) {
         viewModelScope.launch {
             runCatching { repository.importReports(reports, signature, profileUrl) }

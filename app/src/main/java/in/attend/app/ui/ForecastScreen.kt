@@ -19,23 +19,28 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 @Composable
-fun ForecastScreen(data: AppData) {
+fun ForecastScreen(data: AppData, startingCounts: () -> Unit, calendar: () -> Unit) {
     val base = data.baseline
-    var scenario by remember { mutableStateOf(Scenario.CONTINUE_RATE) }
+    var scenario by remember { mutableStateOf(Scenario.PLANNED_ABSENCES) }
     var end by remember(base?.asOf) { mutableStateOf(LocalDate.now().plusMonths(3).coerceAtLeast(base?.asOf ?: LocalDate.now())) }
     val result = remember(base, end, scenario, data.schedule, data.rules) {
         base?.let { runCatching { ForecastEngine.forecast(it, end, scenario, data.schedule, data.rules) } }
     }
-    Page("See what\ncomes next.", "Forecast / estimates") {
+    Page("Your attendance plan", "Forecast / based on your entries") {
         if (base == null) {
-            InfoPanel("Connect ERP first", "Your calendar works now. Import attended and held class counts to unlock personal forecasts.")
+            InfoPanel("Give your forecast a starting point", "Mark completed periods present or absent, or add your known attended / held totals. ERP is optional.")
+            Button(onClick = calendar, modifier = Modifier.fillMaxWidth()) { Text("Log attendance") }
+            OutlinedButton(onClick = startingCounts, modifier = Modifier.fillMaxWidth()) { Text("Add starting counts") }
         } else {
+            Text("Starting from ${base.counts.attended} / ${base.counts.held} recorded classes · ${percent(base.counts.percentage)}", style = MaterialTheme.typography.bodyMedium)
             DateButton("Forecast until", end, { end = it }, Modifier.fillMaxWidth())
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Scenario.entries.forEach { option -> FilterChip(selected = scenario == option, onClick = { scenario = option }, label = { Text(option.title) }) }
             }
             if (result?.isFailure == true) InfoPanel("Check forecast date", result.exceptionOrNull()?.message ?: "Cannot calculate forecast")
             result?.getOrNull()?.let { forecast ->
+                val all = ForecastEngine.forecast(base, end, Scenario.ATTEND_ALL, data.schedule, data.rules)
+                val missed = if (scenario == Scenario.PLANNED_ABSENCES) forecast.futureHeld - (forecast.futureAttended ?: 0.0).toInt() else null
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.extraLarge) {
                     Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("PROJECTED ATTENDANCE", style = MaterialTheme.typography.labelSmall)
@@ -44,9 +49,12 @@ fun ForecastScreen(data: AppData) {
                         Text("${forecast.futureAttended?.let { "%.1f".format(it) } ?: "Unknown"} estimated future attendances", style = MaterialTheme.typography.bodySmall)
                     }
                 }
+                if (missed != null) InfoPanel("${missed} planned missed periods", "With your plan: ${percent(forecast.percentage)}. Attend all: ${percent(all.percentage)}. Holidays and cancelled classes are excluded from both.")
+                if (data.tracking().unmarked > 0) InfoPanel("${data.tracking().unmarked} unmarked past periods", "Tracked totals include only your marked periods and starting counts. Complete your log for a more useful forecast.")
+                OutlinedButton(onClick = calendar, modifier = Modifier.fillMaxWidth()) { Text("Edit absences in Calendar") }
                 AttendanceChart(forecast.points, data.targetBps / 100.0)
                 Text("Dashed line: ${targetLabel(data.targetBps)} target", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                InfoPanel("Every future value is an estimate", "Starts after recorded report: ${base.asOf.format(ShortDate)}. Unreported days between that date and today are estimated too. ${if (data.teachingEnd == null && base.termEnd == null) "Assumes this timetable continues through the forecast date; set a teaching end date in Settings." else "Forecast stops at the teaching term end."}")
+                InfoPanel("Forecast assumptions", "Estimates start after ${base.asOf.format(ShortDate)}. My plan assumes you attend all sessions except the absences you enter. Unreported intervening days are estimates too. ${if (data.teachingEnd == null && base.termEnd == null) "Timetable continues until your chosen date; set term end in Settings." else "Stops at teaching term end."}")
                 if (scenario == Scenario.PLANNED_ABSENCES) InfoPanel("Plan absences in Calendar", "All remaining sessions are treated as attended. Planned absences reduce attendance; closures and cancellations remove sessions entirely.")
                 if (forecast.subjects.isNotEmpty()) Text("Subject projections", style = MaterialTheme.typography.titleLarge)
                 forecast.subjects.forEach { s ->

@@ -1,0 +1,14 @@
+{
+  "passed": 7,
+  "steps": [
+    "Clean launch prioritizes student tracking and shows confirmed Navratri break",
+    "Manual starting counts save without any ERP login",
+    "Present and absent marks update counter immediately; remaining periods stay unmarked",
+    "Recorded periods persist through process restart without forced ERP navigation",
+    "23 October planned absence lowers My plan relative to Attend every session",
+    "Navratri closes 17\u201321 October and 22 October resumes four classes",
+    "ERP sign-in exposes import instructions, actionable missing-link status and count-entry fallback"
+  ],
+  "real_student_import_verified": false,
+  "password_manager_save_tested": false
+}

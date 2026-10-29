@@ -1,0 +1,36 @@
+{
+  "version": "0.2.0",
+  "verified_date": "2026-10-20",
+  "source_branch": "codex/student-attendance-v02",
+  "package": "in.attend.app",
+  "minimum_android_api": 26,
+  "target_android_api": 36,
+  "apk_bytes": 17648059,
+  "apk_sha256": "78af9418837f46cae4d4080599b1fb863a4672d75540c0ef793cd12bad20f304",
+  "apk_v2_signature_verified": true,
+  "signing_certificate_matches_v0_1_0": true,
+  "unit_tests": 45,
+  "unit_failures": 0,
+  "instrumented_tests": 13,
+  "instrumented_failures": 0,
+  "core_line_coverage_percent": 93.44,
+  "core_instruction_coverage_percent": 90.78,
+  "coverage_gate": "80% instruction minimum passed",
+  "lint": "passed; no errors",
+  "ui_smoke": {
+    "passed": 7,
+    "steps": [
+      "Clean launch prioritizes student tracking and shows confirmed Navratri break",
+      "Manual starting counts save without any ERP login",
+      "Present and absent marks update counter immediately; remaining periods stay unmarked",
+      "Recorded periods persist through process restart without forced ERP navigation",
+      "23 October planned absence lowers My plan relative to Attend every session",
+      "Navratri closes 17\u201321 October and 22 October resumes four classes",
+      "ERP sign-in exposes import instructions, actionable missing-link status and count-entry fallback"
+    ],
+    "real_student_import_verified": false,
+    "password_manager_save_tested": false
+  },
+  "real_student_import_verified": false,
+  "password_manager_save_tested": false
+}

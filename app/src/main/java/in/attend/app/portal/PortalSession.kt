@@ -6,6 +6,7 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 
 object PortalSession {
+    fun persist() { CookieManager.getInstance().flush() }
     /** Call on the main thread. Clear the HTTP cache as well as cookies and local storage. */
     fun clear(context: Context, complete: () -> Unit) {
         val view = WebView(context)

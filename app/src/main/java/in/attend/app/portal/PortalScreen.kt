@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.net.http.SslError
 import android.webkit.*
+import android.view.View
+import android.view.autofill.AutofillManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +24,7 @@ import `in`.attend.app.data.AppData
 import `in`.attend.core.*
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.delay
 import java.security.MessageDigest
 
 private data class Candidate(val reports: List<AttendanceSnapshot>, val signature: String)
@@ -29,7 +32,7 @@ private data class Candidate(val reports: List<AttendanceSnapshot>, val signatur
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PortalScreen(data: AppData, model: AttendViewModel, onClose: () -> Unit) {
+fun PortalScreen(data: AppData, model: AttendViewModel, manualCounts: () -> Unit, onClose: () -> Unit) {
     val latestData by rememberUpdatedState(data)
     val context = LocalContext.current
     val captureScript = remember { context.assets.open("capture-portal.js").bufferedReader().use { it.readText() } }
@@ -43,21 +46,32 @@ fun PortalScreen(data: AppData, model: AttendViewModel, onClose: () -> Unit) {
     var generation by remember { mutableIntStateOf(0) }
     var disposed by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
+    var links by remember { mutableStateOf<List<PortalLink>>(emptyList()) }
+    var seenLogin by remember { mutableStateOf(false) }
+    var signedIn by remember { mutableStateOf(false) }
+    var navigationHint by remember { mutableStateOf<String?>(null) }
+    var pollEnabled by remember { mutableStateOf(true) }
     val readPage: () -> Unit = read@ {
         val view = webView ?: return@read
         val url = view.url ?: return@read
         if (!PortalPolicy.allowed(url)) return@read
         val requestGeneration = generation
         view.evaluateJavascript(captureScript) callback@ { raw ->
-            if (disposed || generation != requestGeneration || view.url != url || raw == "null") return@callback
+            if (disposed || !pollEnabled || generation != requestGeneration || view.url != url || raw == "null") return@callback
             val parsed = runCatching { decodePage(JSONObject(raw)) }
-            if (parsed.isFailure) { status = "Could not read this page. Navigate to your attendance report and tap Read page."; return@callback }
+            if (parsed.isFailure) { status = "Could not read this page. Open your attendance report and tap Import this page."; return@callback }
             val page = parsed.getOrThrow()
             if (page.url != url) return@callback
+            links = page.links
+            if (!page.hasPasswordInput && seenLogin) {
+                context.getSystemService(AutofillManager::class.java)?.commit()
+                PortalSession.persist(); seenLogin = false; signedIn = true
+            }
             when (val result = visit.inspect(page)) {
                 PortalResult.LoginRequired -> {
+                    seenLogin = true; signedIn = false
                     profileUrl = null; candidate = null; visited.clear()
-                    status = "Sign in on the official ERP page below. Your password is not read or saved by Attend."
+                    status = "Sign in below. Use your phone's password manager to save credentials. Your ERP session is kept on this device."
                 }
                 is PortalResult.Profile -> {
                     profileUrl = url; model.observeIdentity(result.profile)
@@ -73,12 +87,12 @@ fun PortalScreen(data: AppData, model: AttendViewModel, onClose: () -> Unit) {
                     status = "Attendance found. Review the imported counts before saving."
                     if (!importing && latestData.profile?.let { !StudentIdentity.conflicts(it, profile) } == true && sig in latestData.verifiedLayouts) {
                         importing = true
-                        model.accept(result.reports, sig, profileUrl, onClose) { message -> importing = false; status = message }
+                        model.accept(result.reports, sig, profileUrl, onClose) { message -> importing = false; pollEnabled = false; status = message }
                     }
                 }
                 is PortalResult.Unsupported -> status = if (page.url.substringBefore('?').endsWith("/error/ErrorMessage", true)) {
                     "ERP session may have expired, or the portal is unavailable. Use Sign in to retry. Saved attendance is unchanged."
-                } else result.reason
+                } else "Not imported: ${result.reason}"
                 is PortalResult.IdentityChanged -> {
                     profileUrl = null; candidate = null; visited.clear(); status = result.reason
                 }
@@ -97,27 +111,43 @@ fun PortalScreen(data: AppData, model: AttendViewModel, onClose: () -> Unit) {
             }
         }
     }
+    val currentRead by rememberUpdatedState(readPage)
+    LaunchedEffect(Unit) {
+        while (true) { delay(3000); if (pollEnabled && !loading && candidate == null && !importing) currentRead() }
+    }
+    fun openSection(word: String) {
+        val link = links.firstOrNull { it.label.contains(word, true) || it.url.substringBefore('?').contains(word, true) }
+        if (link != null && PortalPolicy.allowed(link.url)) { navigationHint = null; webView?.loadUrl(link.url) }
+        else navigationHint = "No $word link found on this page. Open the ERP menu inside the page and select $word, then tap Import this page. You can also use Enter counts below."
+    }
     DisposableEffect(Unit) {
         WebView.setWebContentsDebuggingEnabled(false)
-        onDispose { disposed = true; webView?.apply { stopLoading(); removeAllViews(); destroy() }; webView = null }
+        onDispose { disposed = true; PortalSession.persist(); webView?.apply { stopLoading(); removeAllViews(); destroy() }; webView = null }
     }
-    BackHandler { if (candidate != null) candidate = null else if (webView?.canGoBack() == true) webView?.goBack() else onClose() }
+    BackHandler { if (candidate != null) { pollEnabled = false; candidate = null } else if (webView?.canGoBack() == true) webView?.goBack() else onClose() }
     Scaffold(topBar = {
         TopAppBar(title = { Text("Connect ERP") }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close portal") } }, actions = {
-            IconButton(onClick = { candidate = null; readPage() }) { Icon(Icons.Default.Refresh, "Read page") }
+            IconButton(onClick = { navigationHint = null; pollEnabled = true; candidate = null; readPage() }) { Icon(Icons.Default.Refresh, "Import this page") }
         })
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Text("erp.sxcpatna.edu.in", style = MaterialTheme.typography.labelLarge)
-                    Text(status, style = MaterialTheme.typography.bodySmall)
+                    Text(if (signedIn) "Portal open · attendance still needs an imported report" else "1 Sign in  →  2 Open report  →  3 Import", style = MaterialTheme.typography.labelMedium)
+                    Text(navigationHint ?: status, style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        TextButton(onClick = manualCounts) { Text("Enter counts instead") }
+                        TextButton(onClick = { visit.reset(); candidate = null; webView?.loadUrl(PortalPolicy.LOGIN) }) { Text("Sign in") }
+                    }
                 }
             }
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             AndroidView(factory = { ctx ->
                 WebView(ctx).apply {
                     webView = this
+                    importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
+                    CookieManager.getInstance().setAcceptCookie(true)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.allowFileAccess = false
@@ -135,15 +165,18 @@ fun PortalScreen(data: AppData, model: AttendViewModel, onClose: () -> Unit) {
                             return blocked
                         }
                         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                            generation++; candidate = null; loading = true
+                            generation++; candidate = null; loading = true; navigationHint = null; pollEnabled = true
                             if (url != null && !PortalPolicy.allowed(url)) { view.stopLoading(); status = "Unsupported ERP redirect."; loading = false }
                         }
                         override fun onPageFinished(view: WebView, url: String?) {
                             loading = false
                             if (url != null && PortalPolicy.allowed(url)) {
+                                // Add HTML hints only. The app never reads or copies credentials.
+                                view.evaluateJavascript("document.querySelectorAll('input[type=password]').forEach(e => e.setAttribute('autocomplete','current-password')); document.querySelectorAll('input[name*=Username],input[name*=username]').forEach(e => e.setAttribute('autocomplete','username'));", null)
+                                PortalSession.persist()
                                 readPage()
                                 val current = generation
-                                view.postDelayed({ if (!disposed && current == generation && candidate == null) readPage() }, 1200)
+                                view.postDelayed({ if (pollEnabled && !disposed && current == generation && candidate == null) readPage() }, 1200)
                             }
                         }
                         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -160,15 +193,15 @@ fun PortalScreen(data: AppData, model: AttendViewModel, onClose: () -> Unit) {
                 }
             }, modifier = Modifier.weight(1f).fillMaxWidth())
             Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                TextButton(onClick = { visit.reset(); profileUrl = null; candidate = null; webView?.loadUrl(PortalPolicy.LOGIN) }) { Text("Sign in") }
-                TextButton(onClick = { webView?.loadUrl(PortalPolicy.DASHBOARD) }) { Text("Dashboard") }
-                FilledTonalButton(onClick = readPage) { Text("Read page") }
+                TextButton(onClick = { openSection("profile") }) { Text("Profile") }
+                TextButton(onClick = { openSection("attendance") }) { Text("Attendance") }
+                FilledTonalButton(onClick = { navigationHint = null; pollEnabled = true; readPage() }) { Text("Import this page") }
             }
         }
     }
     candidate?.let { item ->
         val baseline = remember(item) { Ledger.baseline(item.reports)!! }
-        AlertDialog(onDismissRequest = { candidate = null }, title = { Text("Check against your ERP") }, text = {
+        AlertDialog(onDismissRequest = { pollEnabled = false; candidate = null }, title = { Text("Check against your ERP") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val p = item.reports.first().profile
                 Text("${p.name}\nRoll ${p.rollNumber} · Semester ${p.semester}")
@@ -177,8 +210,8 @@ fun PortalScreen(data: AppData, model: AttendViewModel, onClose: () -> Unit) {
                 Text("Confirm these values match your ERP page. This prototype has not been independently verified against a signed-in student report.", style = MaterialTheme.typography.bodySmall)
             }
         }, confirmButton = {
-            TextButton(enabled = !importing, onClick = { importing = true; model.accept(item.reports, item.signature, profileUrl, onClose) { message -> importing = false; status = message; candidate = null } }) { Text("Matches ERP · Save") }
-        }, dismissButton = { TextButton(onClick = { candidate = null }) { Text("Keep browsing") } })
+            TextButton(enabled = !importing, onClick = { importing = true; model.accept(item.reports, item.signature, profileUrl, onClose) { message -> importing = false; pollEnabled = false; status = message; candidate = null } }) { Text("Matches ERP · Save") }
+        }, dismissButton = { TextButton(onClick = { pollEnabled = false; candidate = null }) { Text("Keep browsing") } })
     }
 }
 

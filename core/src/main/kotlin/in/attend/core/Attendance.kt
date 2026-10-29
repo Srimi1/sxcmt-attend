@@ -170,7 +170,7 @@ object TeachingCalendar {
 }
 
 enum class Scenario(val title: String) {
-    CONTINUE_RATE("Continue current rate"), ATTEND_ALL("Attend every session"), PLANNED_ABSENCES("Use planned absences")
+    CONTINUE_RATE("Current rate + planned leave"), ATTEND_ALL("Attend every session"), PLANNED_ABSENCES("My plan · includes absences")
 }
 data class ForecastPoint(val date: LocalDate, val percentage: Double?)
 data class SubjectForecast(val code: String, val name: String, val futureHeld: Int, val percentage: Double?)
@@ -185,7 +185,8 @@ object ForecastEngine {
         val sessions = TeachingCalendar.generate(base.asOf.plusDays(1), target, schedule, rules, base.termEnd)
         fun expected(items: List<DatedSession>, counts: Counts): Double? = when (scenario) {
             Scenario.ATTEND_ALL -> items.size.toDouble()
-            Scenario.CONTINUE_RATE -> if (counts.held == 0L) null else items.size * counts.attended.toDouble() / counts.held
+            Scenario.CONTINUE_RATE -> if (counts.held == 0L) null else
+                items.count { s -> rules.none { it.kind == ExceptionKind.ABSENCE && it.applies(s.date, s.session) } } * counts.attended.toDouble() / counts.held
             Scenario.PLANNED_ABSENCES -> items.count { s -> rules.none { it.kind == ExceptionKind.ABSENCE && it.applies(s.date, s.session) } }.toDouble()
         }
         fun percent(items: List<DatedSession>, counts: Counts): Double? {

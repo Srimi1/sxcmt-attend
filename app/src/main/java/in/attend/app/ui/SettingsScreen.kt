@@ -41,7 +41,7 @@ fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) 
         InfoPanel("National holidays only", "Republic Day · 26 January\nIndependence Day · 15 August\nGandhi Jayanti · 2 October\nAdd other confirmed closures in Calendar.")
         HorizontalDivider()
         Text("College connection", style = MaterialTheme.typography.titleLarge)
-        Text("SXCMT ERP · Refresh on app open and on request", style = MaterialTheme.typography.bodyMedium)
+        Text("SXCMT ERP · Session kept on this device. Refresh when you choose.", style = MaterialTheme.typography.bodyMedium)
         Button(onClick = connect, modifier = Modifier.fillMaxWidth()) { Text(if (data.profile == null || demo) "Connect college ERP" else "Open / refresh ERP") }
         if (demo) {
             OutlinedButton(onClick = leaveDemo, modifier = Modifier.fillMaxWidth()) { Text("Leave sample preview") }
@@ -49,7 +49,7 @@ fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) 
             OutlinedButton(onClick = { confirmLogout = true }, modifier = Modifier.fillMaxWidth()) { Text("Disconnect ERP / clear personal data") }
         }
         Text("Your password is entered into the official ERP page. Attend does not read it or store a separate copy. Session and attendance stay on this device; app backups are disabled.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("Attend 0.1.0 · Android prototype\nLive ERP import requires verification with a signed-in student report.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Attend 0.2.0 · Student attendance tracker\nUse your phone's password manager to save ERP credentials. The college controls session expiry. Login alone does not confirm an attendance import.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (editing) TimetableDialog(data, { editing = false }) { sessions -> update { it.copy(schedule = sessions) }; editing = false }
     if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false }, title = { Text("Sign out?") }, text = { Text("This clears the ERP session, imported identity, attendance and calendar changes on this device.") }, confirmButton = { TextButton(onClick = { confirmLogout = false; logout() }) { Text("Sign out") } }, dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Cancel") } })

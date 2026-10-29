@@ -13,9 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import `in`.attend.app.portal.PortalScreen
@@ -35,28 +32,15 @@ private fun AttendApp(model: AttendViewModel = viewModel()) {
     val ui by model.ui.collectAsStateWithLifecycle()
     val data = ui.data
     val demo = ui.isDemo
-    val loaded = ui.loaded
     val notice by model.notice.collectAsStateWithLifecycle()
     var page by rememberSaveable { mutableIntStateOf(0) }
     var portal by rememberSaveable { mutableStateOf(false) }
+    var startingCounts by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     LaunchedEffect(notice) { notice?.let { snackbar.showSnackbar(it); model.notice.value = null } }
-    LaunchedEffect(loaded) {
-        if (loaded && !model.openingRefreshHandled) { model.openingRefreshHandled = true; if (data.profile != null && !demo) portal = true }
-    }
-    val lifecycle = LocalLifecycleOwner.current
-    val currentData by rememberUpdatedState(data)
-    val currentDemo by rememberUpdatedState(demo)
-    DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START && model.openingRefreshHandled && currentData.profile != null && !currentDemo) portal = true
-        }
-        lifecycle.lifecycle.addObserver(observer)
-        onDispose { lifecycle.lifecycle.removeObserver(observer) }
-    }
     if (portal) {
-        PortalScreen(data, model) { portal = false }
+        PortalScreen(data, model, { portal = false; startingCounts = true }, { portal = false })
         return
     }
     val connect: () -> Unit = { model.leaveDemo(); portal = true }
@@ -69,9 +53,9 @@ private fun AttendApp(model: AttendViewModel = viewModel()) {
     }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (page) {
-                0 -> Dashboard(data, demo, connect, model::showDemo, { page = 2 })
-                1 -> CalendarScreen(data, model::update)
-                2 -> ForecastScreen(data)
+                0 -> Dashboard(data, demo, connect, model::showDemo, { page = 2 }, { page = 1 }, { startingCounts = true })
+                1 -> CalendarScreen(data, model::update, model::mark, { page = 2 })
+                2 -> ForecastScreen(data, { startingCounts = true }, { page = 1 })
                 3 -> SettingsScreen(data, demo, model::update, connect, {
                     PortalSession.clear(context) {
                         model.logout { page = 0 }
@@ -79,5 +63,10 @@ private fun AttendApp(model: AttendViewModel = viewModel()) {
                 }, { model.leaveDemo(); page = 0 })
             }
         }
+    }
+    if (startingCounts) StartingCountsDialog(data.manualBaseline, data.reports.isNotEmpty(), { startingCounts = false }) { base ->
+        model.update { it.copy(manualBaseline = base) }
+        model.notice.value = "Starting counts saved. Mark periods after ${base.asOf} in Calendar."
+        startingCounts = false
     }
 }
