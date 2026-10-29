@@ -24,7 +24,7 @@ import java.util.UUID
 
 @Composable
 fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
-                   mark: (LocalDate, Set<String>, AttendanceMark?) -> Unit, forecast: () -> Unit) {
+                   mark: (LocalDate, Set<String>, AttendanceMark?) -> Unit, noClass: (LocalDate, WeekSession, Boolean) -> Unit, forecast: () -> Unit) {
     var selected by remember { mutableStateOf(LocalDate.now()) }
     var month by remember { mutableStateOf(YearMonth.from(selected)) }
     var adding by remember { mutableStateOf(false) }
@@ -32,7 +32,8 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
     var feedback by remember { mutableStateOf<String?>(null) }
     var showMonth by remember { mutableStateOf(false) }
     val teachingEnd = data.teachingEnd ?: data.baseline?.termEnd
-    val sessions = AttendanceTracker.sessionsOn(selected, data.entries, data.schedule, data.rules, teachingEnd)
+    val sessions = data.periodsOn(selected)
+    val assumeMode = data.markingStyle == MarkingStyle.ASSUME_PRESENT
     val pastOrToday = selected <= LocalDate.now()
     val covered = data.sheetBaseline?.asOf?.let { selected <= it } == true
     val dayEntries = data.entries.filter { it.date == selected && it.sessionId in sessions.map { s -> s.session.id } }
@@ -47,7 +48,7 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
             TextButton(onClick = { selected = LocalDate.now(); month = YearMonth.from(selected); feedback = null }) { Text("Today") }
         }
         val total = data.baseline?.counts
-        if (total != null) InfoPanel("Your counter: ${total.attended} / ${total.held} · ${percent(total.percentage)}", "Your marked periods update this count immediately. Unmarked periods do not count as present.")
+        if (total != null) InfoPanel("Your counter: ${total.attended} / ${total.held} · ${percent(total.percentage)}", if (assumeMode) "Finished periods count as present unless you tap A or No class." else "Your marked periods update this count immediately. Unmarked periods do not count as present.")
         TextButton(onClick = { showMonth = !showMonth }) { Text(if (showMonth) "Hide month" else "Show month calendar") }
         if (showMonth) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -82,9 +83,9 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
         feedback?.let { InfoPanel("Saved", it) }
         if (covered) InfoPanel("Covered by your sheet numbers", "This date is already included in the college sheet totals you entered. Mark periods after ${data.sheetBaseline!!.asOf.format(ShortDate)} to avoid double counting.")
         else if (pastOrToday && sessions.isNotEmpty()) {
-            Text("${dayEntries.count { it.mark == AttendanceMark.PRESENT }} present · ${dayEntries.count { it.mark == AttendanceMark.ABSENT }} absent · ${sessions.size - dayEntries.size} unmarked", style = MaterialTheme.typography.bodyMedium)
+            if (!assumeMode) Text("${dayEntries.count { it.mark == AttendanceMark.PRESENT }} present · ${dayEntries.count { it.mark == AttendanceMark.ABSENT }} absent · ${sessions.size - dayEntries.size} unmarked", style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = { record(sessions.map { it.session.id }.toSet(), AttendanceMark.PRESENT) }, modifier = Modifier.weight(1f)) { Text("All present") }
+                if (!assumeMode) FilledTonalButton(onClick = { record(sessions.map { it.session.id }.toSet(), AttendanceMark.PRESENT) }, modifier = Modifier.weight(1f)) { Text("All present") }
                 OutlinedButton(onClick = { record(sessions.map { it.session.id }.toSet(), AttendanceMark.ABSENT) }, modifier = Modifier.weight(1f)) { Text("All absent") }
             }
         }
@@ -92,21 +93,15 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
         NationalHolidays.name(selected)?.let { InfoPanel(it, "National holiday. No scheduled attendance sessions.") }
         if (selected.dayOfWeek == DayOfWeek.SUNDAY) InfoPanel("Sunday off", "No teaching sessions scheduled.")
         if (teachingEnd != null && selected > teachingEnd) InfoPanel("Beyond teaching term", "Teaching ends ${teachingEnd.format(ShortDate)}. No future sessions are generated after this date.")
-        sessions.forEach { item ->
+        if (pastOrToday && !covered) sessions.forEach { item -> PeriodRow(selected, item, data, { d, ids, m -> mark(d, ids, m); feedback = null }, noClass) }
+        else sessions.forEach { item ->
             val absent = data.rules.any { it.kind == ExceptionKind.ABSENCE && it.applies(item.date, item.session) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text("${item.session.period.toString().padStart(2, '0')}", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
                 Column(Modifier.weight(1f)) {
                     Text(item.session.title, style = MaterialTheme.typography.bodyMedium)
                     Text("${item.session.time}${if (absent) " · Planned absence" else ""}", style = MaterialTheme.typography.bodySmall, color = if (absent) Amber else MaterialTheme.colorScheme.onSurfaceVariant)
-                    val entry = dayEntries.firstOrNull { it.sessionId == item.session.id }
-                    if (pastOrToday && !covered) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            FilterChip(selected = entry?.mark == AttendanceMark.PRESENT, onClick = { record(setOf(item.session.id), AttendanceMark.PRESENT) }, label = { Text("Present") })
-                            FilterChip(selected = entry?.mark == AttendanceMark.ABSENT, onClick = { record(setOf(item.session.id), AttendanceMark.ABSENT) }, label = { Text("Absent") })
-                            if (entry != null) TextButton(onClick = { record(setOf(item.session.id), null) }) { Text("Clear") }
-                        }
-                    } else if (!pastOrToday) {
+                    if (!pastOrToday) {
                         FilterChip(selected = absent, onClick = {
                             if (absent) { editing = data.rules.first { it.kind == ExceptionKind.ABSENCE && it.applies(selected, item.session) }; adding = true }
                             else {

@@ -21,7 +21,7 @@ import java.util.UUID
 
 @Composable
 fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) -> Unit, clearData: () -> Unit, leaveDemo: () -> Unit,
-                   publish: (List<WeekSession>) -> Unit, routine: @Composable ColumnScope.() -> Unit) {
+                   publish: (List<WeekSession>) -> Unit, personal: @Composable ColumnScope.() -> Unit, routine: @Composable ColumnScope.() -> Unit) {
     var target by remember(data.targetBps) { mutableStateOf((data.targetBps / 100.0).toString().removeSuffix(".0")) }
     var editing by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
@@ -33,6 +33,8 @@ fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) 
             Button(onClick = { bps?.let { value -> update { it.copy(targetBps = value) } } }, enabled = bps != null, modifier = Modifier.padding(top = 8.dp)) { Text("Save") }
         }
         Text("Planning threshold only. Percentages are rounded for display; calculations use exact counts.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider()
+        personal()
         HorizontalDivider()
         Text("Teaching calendar", style = MaterialTheme.typography.titleLarge)
         Text("${data.schedule.size} sessions per week · Sunday off", style = MaterialTheme.typography.bodyMedium)
@@ -57,7 +59,7 @@ fun SettingsScreen(data: AppData, demo: Boolean, update: ((AppData) -> AppData) 
         } else {
             OutlinedButton(onClick = { confirmLogout = true }, modifier = Modifier.fillMaxWidth()) { Text("Clear my attendance data") }
         }
-        Text("Attend 0.3.0 · Self-service attendance tracker. Marks, sheet numbers and activity hours stay on this device; app backups are disabled.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Attend 0.4.0 · Self-service attendance tracker. Marks, sheet numbers and activity hours stay on this device; app backups are disabled.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (editing) TimetableDialog(data, { editing = false }) { sessions ->
         if (data.classLink != null && !demo) publish(sessions) else update { it.copy(schedule = sessions) }

@@ -42,6 +42,11 @@ data class AppData(
     val routineVersions: List<RoutineVersion> = emptyList(),
     val appliedRoutineVersion: Int? = null,
     val dismissedRoutineVersion: Int? = null,
+    val markingStyle: MarkingStyle = MarkingStyle.MARK_EACH,
+    val assumePresentFrom: LocalDate? = null,
+    val hiddenSubjects: Set<String> = emptySet(),
+    val reminderTime: LocalTime? = null,
+    val setupDone: Boolean = false,
 ) {
     /**
      * Store the latest shared versions and apply the one in force today only when it is the first after joining or one
@@ -56,7 +61,40 @@ data class AppData(
     fun acceptRoutine(version: RoutineVersion) = copy(schedule = version.sessions, appliedRoutineVersion = version.version)
     fun withoutClass() = copy(classLink = null, routineVersions = emptyList(), appliedRoutineVersion = null, dismissedRoutineVersion = null)
     val sheetBaseline: Baseline? get() = manualBaseline?.let { it.copy(termEnd = teachingEnd ?: it.termEnd) }
-    fun tracking(today: LocalDate = LocalDate.now()) = AttendanceTracker.summarize(sheetBaseline, entries, schedule, rules, today, trackingStarted)
+    /** The weekly timetable minus subjects this student doesn't take. */
+    val mySchedule: List<WeekSession> get() = schedule.filter { it.subject !in hiddenSubjects }
+    private val assumeFrom: LocalDate? get() = assumePresentFrom.takeIf { markingStyle == MarkingStyle.ASSUME_PRESENT }
+    fun tracking(today: LocalDate = LocalDate.now(), now: LocalTime = LocalTime.now()) =
+        AttendanceTracker.summarize(sheetBaseline, entries, schedule, rules, today, trackingStarted, assumeFrom, now, hiddenSubjects)
+
+    /** The mark a period shows without a tap (present by default), or null. */
+    fun assumedMark(date: LocalDate, session: WeekSession, today: LocalDate = LocalDate.now(), now: LocalTime = LocalTime.now()) =
+        AttendanceTracker.assumedMark(date, session, rules, assumeFrom, sheetBaseline?.asOf, today, now)
+
+    private fun isNoClassRule(rule: CalendarException, date: LocalDate, sessionId: String) =
+        rule.kind == ExceptionKind.CANCELLATION && rule.sessionId == sessionId && rule.start == date && rule.end == date
+    /** Periods to list for a day, including ones marked "No class" so the tap can be undone. */
+    fun periodsOn(date: LocalDate): List<DatedSession> {
+        val listed = rules.filterNot { it.kind == ExceptionKind.CANCELLATION && it.sessionId != null && it.start == date && it.end == date }
+        return AttendanceTracker.sessionsOn(date, entries, mySchedule, listed, teachingEnd ?: manualBaseline?.termEnd)
+    }
+    fun isNoClass(date: LocalDate, sessionId: String) = rules.any { isNoClassRule(it, date, sessionId) }
+    /** "No class": the teacher didn't take it, so it leaves the held count. Any mark on that period is dropped. */
+    fun withNoClass(date: LocalDate, session: WeekSession, on: Boolean): AppData = if (!on) copy(rules = rules.filterNot { isNoClassRule(it, date, session.id) })
+        else copy(rules = rules.filterNot { isNoClassRule(it, date, session.id) } +
+            CalendarException("noclass-$date-${session.id}", date, date, ExceptionKind.CANCELLATION, "No class · period ${session.period}", session.id),
+            entries = entries.filterNot { it.date == date && it.sessionId == session.id })
+
+    /** Switching to mark-each keeps what was counted: periods assumed present so far become saved marks. */
+    fun withMarkingStyle(style: MarkingStyle, today: LocalDate = LocalDate.now(), now: LocalTime = LocalTime.now()): AppData = when {
+        style == markingStyle && (style == MarkingStyle.MARK_EACH || assumePresentFrom != null) -> this
+        style == MarkingStyle.ASSUME_PRESENT -> copy(markingStyle = style, assumePresentFrom = today,
+            trackingStarted = trackingStarted?.let { minOf(it, today) } ?: today)
+        else -> {
+            val kept = AttendanceTracker.assumedEntries(sheetBaseline, entries.filter { it.date <= today }, mySchedule, rules, today, assumeFrom, now)
+            copy(markingStyle = style, assumePresentFrom = null, entries = entries + kept)
+        }
+    }
     val baseline: Baseline? get() = tracking().baseline
     fun activityCredit(classes: Counts) = ActivityMath.credit(classes, ActivityMath.totalHours(activity), lecturesPerHour)
     fun withMarks(date: LocalDate, sessionIds: Set<String>, mark: AttendanceMark?): AppData = copy(
@@ -104,6 +142,8 @@ object StateCodec {
         put("target", data.targetBps); put("teachingEnd", data.teachingEnd?.toString())
         put("activity", array(data.activity.map { JSONObject().put("id", it.id).put("date", it.date.toString()).put("hours", it.hours).put("label", it.label) }))
         put("lecturesPerHour", data.lecturesPerHour)
+        put("markingStyle", data.markingStyle.name); put("assumeFrom", data.assumePresentFrom?.toString())
+        put("hiddenSubjects", array(data.hiddenSubjects)); put("reminder", data.reminderTime?.toString()); put("setupDone", data.setupDone)
         put("classLink", data.classLink?.let { JSONObject().put("id", it.id).put("name", it.name).put("code", it.joinCode).put("owner", it.isOwner) })
         put("appliedRoutine", data.appliedRoutineVersion); put("dismissedRoutine", data.dismissedRoutineVersion)
         put("routineVersions", array(data.routineVersions.map { v -> JSONObject().put("version", v.version).put("from", v.effectiveFrom.toString())
@@ -126,6 +166,11 @@ object StateCodec {
             trackingStarted = j.nullable("trackingStarted")?.let(LocalDate::parse),
             activity = j.optJSONArray("activity")?.objects()?.map { ActivityEntry(it.getString("id"), LocalDate.parse(it.getString("date")), it.getInt("hours"), it.getString("label")) }.orEmpty(),
             lecturesPerHour = j.optInt("lecturesPerHour", 1).coerceIn(1, 10),
+            markingStyle = runCatching { MarkingStyle.valueOf(j.getString("markingStyle")) }.getOrDefault(MarkingStyle.MARK_EACH),
+            assumePresentFrom = j.nullable("assumeFrom")?.let(LocalDate::parse),
+            hiddenSubjects = j.optJSONArray("hiddenSubjects")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty(),
+            reminderTime = j.nullable("reminder")?.let { runCatching { LocalTime.parse(it) }.getOrNull() },
+            setupDone = j.optBoolean("setupDone", false),
             // Shared-routine data comes from classmates; if it cannot be read, drop it rather than lose attendance.
             classLink = runCatching { j.optJSONObject("classLink")?.let { ClassLink(it.getString("id"), it.getString("name"), it.getString("code"), it.optBoolean("owner")) } }.getOrNull(),
             routineVersions = j.optJSONArray("routineVersions")?.objects()?.mapNotNull { v -> runCatching { RoutineVersion(v.getInt("version"), LocalDate.parse(v.getString("from")),

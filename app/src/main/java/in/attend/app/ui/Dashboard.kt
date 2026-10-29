@@ -16,15 +16,17 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Composable
-fun Dashboard(data: AppData, demo: Boolean, mark: (LocalDate, Set<String>, AttendanceMark?) -> Unit, preview: () -> Unit,
+fun Dashboard(data: AppData, demo: Boolean, mark: (LocalDate, Set<String>, AttendanceMark?) -> Unit,
+              noClass: (LocalDate, WeekSession, Boolean) -> Unit, preview: () -> Unit,
               forecast: () -> Unit, calendar: () -> Unit, activity: () -> Unit, sheet: () -> Unit,
               acceptRoutine: (RoutineVersion) -> Unit = {}, dismissRoutine: (RoutineVersion) -> Unit = {}) {
     val today = LocalDate.now()
     val tracking = data.tracking(today)
     val base = tracking.baseline
     val sheetBase = data.sheetBaseline
-    val sessions = AttendanceTracker.sessionsOn(today, data.entries, data.schedule, data.rules, data.teachingEnd ?: sheetBase?.termEnd)
+    val sessions = data.periodsOn(today)
     val todayEntries = data.entries.filter { it.date == today }
+    val assumeMode = data.markingStyle == MarkingStyle.ASSUME_PRESENT
     val covered = sheetBase?.asOf?.let { today <= it } == true
     val closure = data.rules.firstOrNull { it.kind == ExceptionKind.CLOSURE && today in it.start..it.end }
     Page("Your attendance", "ATTEND  /  ${today.format(ShortDate)}") {
@@ -48,7 +50,11 @@ fun Dashboard(data: AppData, demo: Boolean, mark: (LocalDate, Set<String>, Atten
                     }
                     if (base.counts.held > 0) {
                         val recovery = AttendanceMath.recoveryClasses(base.counts, data.targetBps)
-                        Text(if (recovery == 0L) "You can miss ${AttendanceMath.missAllowance(base.counts, data.targetBps)} more classes and stay at ${targetLabel(data.targetBps)}." else "Attend the next ${recovery ?: "all remaining"} classes in a row to reach ${targetLabel(data.targetBps)}.",
+                        val allowance = AttendanceMath.missAllowance(base.counts, data.targetBps)
+                        Text(if (recovery == 0L && allowance == 0L) "You're right at ${targetLabel(data.targetBps)}. Missing the next class takes you below it."
+                            else if (recovery == 0L) "You can miss ${classes(allowance)} more and stay at ${targetLabel(data.targetBps)}."
+                            else if (recovery == null) "Attend every remaining class to reach ${targetLabel(data.targetBps)}."
+                            else "Attend the next ${classes(recovery)} in a row to reach ${targetLabel(data.targetBps)}.",
                             style = MaterialTheme.typography.bodyMedium, color = if (recovery == 0L) onTrackColor() else belowColor())
                     }
                 }
@@ -78,31 +84,23 @@ fun Dashboard(data: AppData, demo: Boolean, mark: (LocalDate, Set<String>, Atten
                     sessions.isEmpty() -> Text("No classes scheduled", style = MaterialTheme.typography.bodyMedium)
                     covered -> Text("Today is already inside your sheet totals.", style = MaterialTheme.typography.bodyMedium)
                     else -> {
-                        sessions.forEach { item ->
-                            val entry = todayEntries.firstOrNull { it.sessionId == item.session.id }
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("${item.session.period}", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
-                                Column(Modifier.weight(1f)) {
-                                    Text(item.session.title, style = MaterialTheme.typography.bodyMedium)
-                                    Text(item.session.time, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                FilterChip(selected = entry?.mark == AttendanceMark.PRESENT, label = { Text("P") }, onClick = {
-                                    mark(today, setOf(item.session.id), if (entry?.mark == AttendanceMark.PRESENT) null else AttendanceMark.PRESENT)
-                                })
-                                FilterChip(selected = entry?.mark == AttendanceMark.ABSENT, label = { Text("A") }, onClick = {
-                                    mark(today, setOf(item.session.id), if (entry?.mark == AttendanceMark.ABSENT) null else AttendanceMark.ABSENT)
-                                })
-                            }
-                        }
+                        sessions.forEach { item -> PeriodRow(today, item, data, mark, noClass) }
                         val rest = sessions.map { it.session.id }.filter { id -> todayEntries.none { it.sessionId == id } }.toSet()
-                        Text("${sessions.size - rest.size} of ${sessions.size} marked · tap a chip again to clear", style = MaterialTheme.typography.bodySmall)
-                        if (rest.isNotEmpty()) FilledTonalButton(onClick = { mark(today, rest, AttendanceMark.PRESENT) }, modifier = Modifier.fillMaxWidth()) { Text("Mark remaining ${rest.size} present") }
+                        if (assumeMode) {
+                            val cancelled = sessions.count { data.isNoClass(today, it.session.id) }
+                            val absent = sessions.count { s -> !data.isNoClass(today, s.session.id) && (todayEntries.firstOrNull { it.sessionId == s.session.id }?.mark ?: data.assumedMark(today, s.session)) == AttendanceMark.ABSENT }
+                            val later = sessions.count { s -> !data.isNoClass(today, s.session.id) && todayEntries.none { it.sessionId == s.session.id } && data.assumedMark(today, s.session) == null }
+                            Text("$absent absent · $cancelled no class · ${sessions.size - absent - cancelled - later} present" + (if (later > 0) " · $later later today" else ""), style = MaterialTheme.typography.bodySmall)
+                        } else Text("${sessions.size - rest.size} of ${sessions.size} marked · tap a chip again to clear", style = MaterialTheme.typography.bodySmall)
+                        if (!assumeMode && rest.isNotEmpty()) FilledTonalButton(onClick = { mark(today, rest, AttendanceMark.PRESENT) }, modifier = Modifier.fillMaxWidth()) { Text("Mark remaining ${rest.size} present") }
                     }
                 }
                 TextButton(onClick = calendar) { Icon(Icons.Default.EditCalendar, null); Spacer(Modifier.width(8.dp)); Text("Other days, holidays and leave") }
             }
         }
-        if (tracking.unmarked > 0 && base != null) InfoPanel("${tracking.unmarked} past periods unmarked", "Unmarked periods are left out, so your percentage may be off. Mark them in Calendar. We never assume you were present.")
+        if (tracking.unmarked > 0 && base != null) InfoPanel("${tracking.unmarked} past periods unmarked",
+            if (assumeMode) "These are from before you turned on present by default, so they're left out. Mark them in Calendar if you know them."
+            else "Unmarked periods are left out, so your percentage may be off. Mark them in Calendar. We never assume you were present.")
         sheetBase?.let { s ->
             val marks = tracking.studentCounts
             InfoPanel("Sheet through ${s.asOf.format(ShortDate)}: ${s.counts.attended} / ${s.counts.held}", "Your marks since then: ${marks.attended} / ${marks.held}. When the next monthly sheet arrives, enter its cumulative numbers so the college's count replaces your marks up to that date.")
@@ -125,3 +123,5 @@ fun Dashboard(data: AppData, demo: Boolean, mark: (LocalDate, Set<String>, Atten
         if (base == null) TextButton(onClick = preview) { Text("Explore with sample data") }
     }
 }
+
+private fun classes(n: Long) = if (n == 1L) "1 class" else "$n classes"

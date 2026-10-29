@@ -14,8 +14,8 @@ android {
         applicationId = "in.attend.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         val routine = Properties().apply { file("routine.properties").inputStream().use(::load) }
         buildConfigField("String", "ROUTINE_BASE_URL", "\"${routine.getProperty("baseUrl")}\"")
