@@ -8,18 +8,37 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-val Forest = Color(0xFF315C48)
-val Lime = Color(0xFFE3EDBD)
-val Paper = Color(0xFFF8F7F2)
-val Ink = Color(0xFF202C25)
+// Monochrome base (white / black) with two small accents: dark purple for attendance, dark blue for planning.
+// Green and red carry meaning only: on track or below the minimum.
+val Ink = Color(0xFF111114)
 val Amber = Color(0xFF9B601D)
-private val Light = lightColorScheme(primary = Forest, onPrimary = Color.White, primaryContainer = Lime, onPrimaryContainer = Ink,
-    secondary = Color(0xFF6A7650), secondaryContainer = Lime, onSecondaryContainer = Ink,
-    surfaceContainer = Color(0xFFF0F1E8), background = Paper, surface = Paper, onSurface = Ink, onBackground = Ink,
-    surfaceVariant = Color(0xFFEDEEE5), onSurfaceVariant = Color(0xFF5B655E), outlineVariant = Color(0xFFDDE0D4))
-private val Dark = darkColorScheme(primary = Color(0xFFA8D2B4), onPrimary = Ink, primaryContainer = Forest, onPrimaryContainer = Lime,
-    background = Color(0xFF131C17), surface = Color(0xFF131C17), surfaceVariant = Color(0xFF25332B), onSurface = Color(0xFFE4E9DD),
-    onBackground = Color(0xFFE4E9DD), onSurfaceVariant = Color(0xFFBAC8BA))
+private val Purple = Color(0xFF3B2A73)
+private val Navy = Color(0xFF1F3A6B)
+private val OnTrackLight = Color(0xFF2E7D4F)
+private val BelowLight = Color(0xFFB3261E)
+private val OnTrackDark = Color(0xFF7FD3A0)
+private val BelowDark = Color(0xFFF2B8B5)
+
+private val Light = lightColorScheme(
+    primary = Ink, onPrimary = Color.White, primaryContainer = Color(0xFFF3F2F7), onPrimaryContainer = Ink,
+    secondary = Purple, onSecondary = Color.White, secondaryContainer = Color(0xFFE9E4F7), onSecondaryContainer = Color(0xFF1D1540),
+    tertiary = Navy, onTertiary = Color.White, tertiaryContainer = Color(0xFFE3EAF7), onTertiaryContainer = Color(0xFF0F1E3D),
+    background = Color.White, surface = Color.White, onBackground = Ink, onSurface = Ink,
+    surfaceContainer = Color(0xFFF4F4F6), surfaceVariant = Color(0xFFF4F4F6), onSurfaceVariant = Color(0xFF5C5C66),
+    outline = Color(0xFF8A8A94), outlineVariant = Color(0xFFE2E2E8), error = BelowLight,
+)
+private val Dark = darkColorScheme(
+    primary = Color(0xFFF2F2F5), onPrimary = Ink, primaryContainer = Color(0xFF1E1B2E), onPrimaryContainer = Color(0xFFECEAF6),
+    secondary = Color(0xFFB9A9F2), onSecondary = Color(0xFF1D1540), secondaryContainer = Color(0xFF2A2052), onSecondaryContainer = Color(0xFFECEAF6),
+    tertiary = Color(0xFF8FB0EA), onTertiary = Color(0xFF0F1E3D), tertiaryContainer = Color(0xFF1A2A4A), onTertiaryContainer = Color(0xFFDCE6FA),
+    background = Color(0xFF0E0E10), surface = Color(0xFF0E0E10), onBackground = Color(0xFFEDEDF0), onSurface = Color(0xFFEDEDF0),
+    surfaceContainer = Color(0xFF1A1A1E), surfaceVariant = Color(0xFF1A1A1E), onSurfaceVariant = Color(0xFFB4B4BE),
+    outline = Color(0xFF6E6E78), outlineVariant = Color(0xFF2C2C33), error = BelowDark,
+)
+
+/** Status colours for "at or above the minimum" and "below it", matched to light or dark mode. */
+@Composable fun onTrackColor() = if (isSystemInDarkTheme()) OnTrackDark else OnTrackLight
+@Composable fun belowColor() = if (isSystemInDarkTheme()) BelowDark else BelowLight
 
 @Composable
 fun AttendTheme(content: @Composable () -> Unit) {

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,9 +14,12 @@ android {
         applicationId = "in.attend.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        val routine = Properties().apply { file("routine.properties").inputStream().use(::load) }
+        buildConfigField("String", "ROUTINE_BASE_URL", "\"${routine.getProperty("baseUrl")}\"")
+        buildConfigField("String", "ROUTINE_ANON_KEY", "\"${routine.getProperty("anonKey")}\"")
     }
     buildTypes {
         release {

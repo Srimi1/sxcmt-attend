@@ -28,9 +28,9 @@ fun ForecastScreen(data: AppData, startingCounts: () -> Unit, calendar: () -> Un
     }
     Page("Your attendance plan", "Forecast / based on your entries") {
         if (base == null) {
-            InfoPanel("Give your forecast a starting point", "Mark completed periods present or absent, or add your known attended / held totals. ERP is optional.")
+            InfoPanel("Give your forecast a starting point", "Mark completed periods present or absent, or enter the cumulative numbers from your latest college attendance sheet.")
             Button(onClick = calendar, modifier = Modifier.fillMaxWidth()) { Text("Log attendance") }
-            OutlinedButton(onClick = startingCounts, modifier = Modifier.fillMaxWidth()) { Text("Add starting counts") }
+            OutlinedButton(onClick = startingCounts, modifier = Modifier.fillMaxWidth()) { Text("Enter sheet numbers") }
         } else {
             Text("Starting from ${base.counts.attended} / ${base.counts.held} recorded classes · ${percent(base.counts.percentage)}", style = MaterialTheme.typography.bodyMedium)
             DateButton("Forecast until", end, { end = it }, Modifier.fillMaxWidth())
@@ -63,7 +63,7 @@ fun ForecastScreen(data: AppData, startingCounts: () -> Unit, calendar: () -> Un
                         Text(percent(s.percentage), style = MaterialTheme.typography.titleMedium)
                     }
                 }
-                Text("Subject projections appear only when imported counts can be matched to your timetable.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Subject projections appear only when you enter per-subject sheet counts that match your timetable.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

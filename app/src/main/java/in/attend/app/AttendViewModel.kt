@@ -13,6 +13,9 @@ data class AttendUiState(val data: AppData = AppData(), val isDemo: Boolean = fa
 
 class AttendViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as AttendApplication).repository
+    private val routine = (application as AttendApplication).routine
+    val account = MutableStateFlow(routine.email.takeIf { routine.signedIn })
+    val busy = MutableStateFlow(false)
     private val demoData = MutableStateFlow<AppData?>(null)
     val ui = combine(repository.data, demoData) { real, demo -> AttendUiState(demo ?: real, demo != null, true) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, AttendUiState())
@@ -33,30 +36,75 @@ class AttendViewModel(application: Application) : AndroidViewModel(application) 
         if (date > LocalDate.now()) return
         update { old -> old.withMarks(date, sessionIds, mark) }
     }
-    fun accept(reports: List<AttendanceSnapshot>, signature: String, profileUrl: String?, done: () -> Unit, failed: (String) -> Unit = {}) {
+    fun clearData(done: () -> Unit) {
         viewModelScope.launch {
-            runCatching { repository.importReports(reports, signature, profileUrl) }
-                .onSuccess { demoData.value = null; notice.value = "Attendance imported from ERP"; done() }
-                .onFailure { val message = it.message ?: "Import failed; previous records kept"; notice.value = message; failed(message) }
+            repository.clear(); routine.forget(); account.value = null; demoData.value = null
+            notice.value = "Your attendance data was cleared from this device."; done()
         }
     }
-    fun observeIdentity(profile: StudentProfile) {
-        viewModelScope.launch { repository.forgetIfDifferent(profile) }
+
+    init {
+        // Refresh the shared routine on app open; offline keeps the saved copy.
+        viewModelScope.launch { ui.first { it.loaded }; syncRoutine(quiet = true) }
     }
-    fun logout(done: () -> Unit) {
-        viewModelScope.launch { repository.clear(); demoData.value = null; notice.value = "Signed out. Personal records cleared."; done() }
+
+    private fun online(success: String? = null, block: suspend () -> Unit) {
+        if (busy.value) return
+        busy.value = true
+        viewModelScope.launch {
+            runCatching { block() }.onSuccess { success?.let { notice.value = it } }
+                .onFailure { notice.value = it.message ?: "Something went wrong" }
+            account.value = routine.email.takeIf { routine.signedIn }
+            busy.value = false
+        }
+    }
+    private suspend fun adopt(link: ClassLink) {
+        val (versions, owner) = routine.history(link.id)
+        repository.update { it.withRoutine(link.copy(isOwner = owner), versions) }
+    }
+
+    fun sendCode(email: String, sent: () -> Unit) = online("Code sent to $email. It expires in 5 minutes.") { routine.sendCode(email); sent() }
+    fun verifyCode(email: String, code: String, done: () -> Unit) = online("Signed in") { routine.verifyCode(email, code); done() }
+    fun createClass(name: String) = online("Class created. Share the join code with classmates.") {
+        val data = ui.value.data
+        Routines.validate(data.schedule)?.let { throw IllegalArgumentException(it) }
+        adopt(routine.createClass(name, data.schedule, LocalDate.now()))
+    }
+    fun joinClass(code: String) = online("Joined. Your timetable now follows the class routine.") { adopt(routine.joinClass(code)) }
+    fun syncRoutine(quiet: Boolean = false) {
+        val link = ui.value.data.classLink ?: return
+        if (!routine.signedIn || demoData.value != null) return
+        if (quiet) viewModelScope.launch { runCatching { adopt(link) } } else online("Routine is up to date") { adopt(link) }
+    }
+    fun publishRoutine(sessions: List<WeekSession>, from: LocalDate, note: String) {
+        val link = ui.value.data.classLink ?: return
+        online("New routine version shared with your class") { routine.publish(link.id, sessions, from, note); adopt(link) }
+    }
+    fun leaveClass() {
+        val link = ui.value.data.classLink ?: return
+        online("You left ${link.name}. Your timetable stays on this phone.") {
+            routine.leaveClass(link.id); repository.update { it.withoutClass() }
+        }
+    }
+    fun signOut() = online("Signed out") { routine.signOut(); repository.update { it.withoutClass() } }
+    fun deleteClassAccountData() = online("Removed from all classes and your account detached from routine history.") {
+        routine.deleteMyClassData(); repository.update { it.withoutClass() }
+    }
+    fun acceptRoutine(version: RoutineVersion) { update { it.acceptRoutine(version) }; notice.value = "Timetable updated to version ${version.version}" }
+    fun dismissRoutine(version: RoutineVersion) { update { it.copy(dismissedRoutineVersion = version.version) }; notice.value = "Kept your timetable. You can apply it later from Version history." }
+    fun rotateCode() {
+        val link = ui.value.data.classLink ?: return
+        online("New join code made. The old code no longer works.") { val fresh = routine.rotateCode(link.id); repository.update { it.copy(classLink = fresh.copy(isOwner = true)) } }
     }
     companion object {
         private fun sampleData(): AppData {
-            val p = StudentProfile("Sample student", "DEMO", "5", "BBA IB")
             val subjects = listOf(
                 SubjectAttendance("RETAIL", "Retail Management", Counts(30, 36)), SubjectAttendance("IFS", "International Financial System", Counts(29, 33)),
                 SubjectAttendance("EDP", "Entrepreneurship Development Programme", Counts(34, 35)), SubjectAttendance("ST_MGMT", "Strategic Management", Counts(26, 31)),
-                SubjectAttendance("SAPM", "Security Analysis & Portfolio Management", Counts(29, 32)), SubjectAttendance("OJT", "OJT / Internship and Viva", Counts(7, 11)),
-                SubjectAttendance("FM", "Foundation & Mentoring", Counts(6, 7)),
+                SubjectAttendance("SAPM", "Security Analysis & Portfolio Management", Counts(29, 32)),
             )
-            val r = AttendanceSnapshot(p, LocalDate.parse("2026-07-13"), LocalDate.parse("2026-09-30"), ReportKind.CUMULATIVE, Counts(161, 185), subjects, Instant.parse("2026-10-17T10:00:00Z"), "demo://sample")
-            return AppData(reports = listOf(r))
+            val sheet = Baseline(Counts(161, 185), subjects, LocalDate.parse("2026-09-30"), month = Counts(43, 45))
+            return AppData(manualBaseline = sheet, activity = listOf(ActivityEntry("demo", LocalDate.parse("2026-10-10"), 6, "College fest volunteering")))
         }
     }
 }

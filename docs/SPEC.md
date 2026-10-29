@@ -1,4 +1,17 @@
-# Attendance Predictor v0.1
+# Attendance Predictor
+
+## Self-service update — v0.3.0, 29 October 2026
+
+ERP is removed entirely: no WebView, parser, import, stored reports or INTERNET permission. The app must never depend on ERP. Where earlier sections mention ERP, they are superseded.
+
+- Baseline: the student's row from the college monthly sheet — cumulative attended, cumulative held, covered-through date, optional month Σ/held and per-subject counts. Saved subjects and month totals persist.
+- Marks: completed periods are Present / Absent / unmarked. Marks on or before the sheet date are superseded by the sheet. Unmarked periods never count.
+- Cumulative = (sheet attended + P) / (sheet held + P + A). Minimum 75%, editable. Monthly = sheet month total (for the sheet's month) + marks in that month; monthly percentages are never averaged into the cumulative figure.
+- Activity hours: hours × lectures-per-hour (default 1) are added to attended only, capped at held (≤100%); excess is reported as unused. Hours-to-target = ceil(target × held) − attended, divided by lectures-per-hour, rounded up.
+- Today screen marks each period with one tap (P / A, tap again to clear) plus "mark remaining present".
+- Old 0.2.x state decodes; retired ERP keys are ignored and dropped on next save.
+- Shared routine (InsForge): email-OTP sign-in; create class (join code) or join by code; members read routine versions; any member publishes a new append-only version; restore = republish. Active version = newest whose effective date has arrived. Only timetables, membership and sign-in email are stored online. Server validates timetables (Mon–Sat, periods 1–12, unique slots, ≤72 periods), rate-limits publishing (5/day/member, 30/day/class), class creation (3/day), joins (10/day), wrong codes (10/hour), and caps payloads at 32 KB with no control or invisible formatting characters. Classmates' versions need the student's approval before replacing their timetable; own versions apply directly. Creator can rotate the join code. Clients keep the latest 10 versions and skip any version that fails to decode.
+
 
 ## Publication corrections — v0.2.1, 29 October 2026
 

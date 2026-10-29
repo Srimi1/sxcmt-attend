@@ -22,3 +22,23 @@ __pycache__/
 .DS_Store
 .android-avd/
 Attend-*.patch
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf
+
+# InsForge link (contains admin API key)
+.insforge/
+.agents/
+.env*

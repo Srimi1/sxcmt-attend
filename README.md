@@ -6,13 +6,15 @@ An Android attendance planner for SXCMT / Xavier University, Patna. Native Kotli
 
 ## Current status
 
-Version 0.2.1 publishes the full student-tracking update with fixes for older reporting dates, historical timetable edits, manual totals overriding an older ERP import, and the dashboard's subject counts and refresh timestamp. It can update either earlier test APK while preserving device data.
+Version 0.3.0 removes the college ERP integration completely. The ERP's numbers were not reliable and its live import was never verified, so the app no longer opens, reads or depends on the ERP in any way. Attendance is self-service:
 
-Version 0.2 puts student attendance tracking first. Mark each completed period present or absent, keep unmarked periods unknown, optionally enter starting totals, and plan future absences. Counters and forecasts update from your entries without requiring ERP. Entries retain timetable snapshots so later timetable edits cannot erase recorded classes. The college-confirmed Navratri closure is 17–21 October 2026; teaching resumes 22 October.
+- **Sheet numbers** — copy your row from the latest monthly college sheet: cumulative attended (LAST ATT + this month's Σ), cumulative held, the date it covers, and optionally that month's Σ and per-subject counts.
+- **P / A per period** — the Today screen lists today's periods with one-tap **P** and **A** chips and *Mark remaining present*. Calendar handles other days, holidays, cancellations and planned leave.
+- **Monthly and cumulative** — cumulative = (sheet attended + your P) / (sheet held + your P + A) and is checked against the 75% minimum. The month figure uses the sheet's month total plus your marks.
+- **Activity hours** — extracurricular hours count as attended lectures (1 hour = 1 lecture by default, adjustable in Settings). They raise the attended side only: 360 / 600 (60%) + 30 h = 390 / 600 (65%). Credit cannot go above 100%; any excess is shown as unused.
+- When the next sheet arrives, enter its numbers. The college's count replaces your marks up to that date, so nothing is counted twice.
 
-The home screen offers attendance logging, starting counts, forecasts and optional ERP access. Calendar separates actual period marks from future plans; My plan is the default forecast, with an attend-all comparison. Closures and cancellations remove held classes; planned absences remove expected attendances. Sample data remains separate and temporary.
-
-**Live ERP integration is a prototype, not a verified integration.** The public sign-in page is known; the signed-in profile and attendance markup are not. A conservative label-based adapter can read supported visible tables, but a real student sign-in and count comparison are still required. Unsupported or ambiguous layouts produce a visible error and leave saved attendance unchanged. Do not describe a successful synthetic parser test as a working live ERP import.
+Upgrading from 0.2.x keeps marks, starting counts, timetable and calendar changes. Saved ERP reports are dropped; if you relied on them, enter your sheet numbers once.
 
 ## Build
 
@@ -39,34 +41,44 @@ The Gradle wrapper pins Gradle 8.13 and verifies the distribution SHA-256. Maven
 
 ## Use
 
-1. Install the APK and use **Log attendance**. For past dates or today, mark each period **Present** or **Absent**. Marks save on the device and update the counter. A cleared mark becomes unknown.
-2. Optionally use **Add starting counts** for known attended / held totals and their reporting date. These totals take precedence over saved ERP reports until the next verified import. Log periods after that date; entries covered by those totals are never added again.
-3. For future dates, select **Plan absence** for a period or add a holiday, leave or cancellation. **See forecast impact** opens My plan, which compares planned attendance with attending every session.
-4. Optional ERP: choose **Connect college ERP**, sign in on the official page and open your profile / attendance report. Profile and Attendance buttons follow actual discovered portal links; **Import this page** reads the visible report. Unsupported layouts show a reason and offer **Enter counts instead**.
-5. Before first ERP import, compare identity, reporting date, scope and counts. Save only if they match. A later official report supersedes covered student marks. ERP refresh is user-initiated and never hijacks app reopening.
-
-ERP cookies are flushed to device storage, and WebView exposes Android Autofill with username/password hints. Use the phone's password-manager save prompt; the app does not maintain a separate password vault. Server-side ERP expiry may still require a fresh sign-in. Successful credential saving with a real password manager remains a phone acceptance check.
-
-**Unsupported layout:** no records are imported. Navigate to a report with labelled identity, explicit reporting dates and attended/held counts. The adapter may need a targeted update after an authenticated page is inspected. Passwords or a session cookie must never be shared to do that work.
-
-**Offline:** student marks, starting totals, plans and previous imports remain usable. A report date and a fetch timestamp represent different things. Unmarked or future sessions are never promoted to recorded attendance.
+1. Install the APK. Tap **Enter sheet numbers** and copy your cumulative attended / held and the sheet's end date. Check the preview percentage matches the sheet's Cum_% column.
+2. Each teaching day, tap **P** or **A** for each period on the Today screen. Tap a chip again to clear it. Unmarked periods never count.
+3. Add extracurricular hours in **Activity**. The dashboard shows class-only and with-activity percentages separately.
+4. For future dates, plan absences or add holidays, leave or cancellations in Calendar. **Forecast** compares your plan with attending everything.
 
 ## Counting rules
 
 - The supplied timetable contains 24 sessions per week (5/3/3/4/5/4), including Placement Seminar and Activity. Both Friday IFS periods are separate sessions.
 - Sundays, three national dates (26 January, 15 August, 2 October), and the college-confirmed 17–21 October 2026 Navratri closure are excluded. Other festivals require confirmed college closure dates. Saved calendar changes can be edited or removed.
-- Official held counts are authoritative. September's scheduled 102 versus recorded 45 is not explained by the three sheets; no inferred holidays or attendance credits are fabricated.
+- The college sheet's held counts are authoritative. September's scheduled 102 versus recorded 45 is not explained by the three sheets; no inferred holidays or attendance credits are fabricated.
 - Cumulative attendance uses combined integer counts. The target is adjustable to two decimal places; recovery and absence limits are calculated without display rounding.
 - Subject estimates require complete imported count coverage across the combined reporting periods and a matching timetable subject. Unknown labels stay unmapped rather than being assigned to another subject.
 
-## Privacy and connection boundaries
+## Shared class routine
 
-No analytics, backend, credential vault or password interception. Extraction never reads password inputs, cookies, tokens or form submissions. The only allowed extraction origin is `https://erp.sxcpatna.edu.in` on its standard HTTPS port. File/content access, mixed content, third-party cookies and WebView debugging are disabled. TLS errors stop the connection. Session data lives in the app's WebView sandbox; app cloud/device backups are excluded. Logout clears session and local personal records.
+Settings → **Class routine** lets one classmate create the class from their timetable and share a 10-character join code. Everyone who joins gets the same timetable, so nobody types it twice.
+
+- Sign-in is a 6-digit code emailed to you; there is no password.
+- Any member can edit the weekly timetable; saving publishes a new version for the class. Versions are never edited or deleted, so a bad edit is undone with **Restore for class** in Version history.
+- A classmate's change never replaces your timetable silently. The app shows it and asks **Use it** or **Keep mine**; your own changes apply straight away.
+- The class creator can **Change join code** if the code leaks; existing members stay.
+- The app refreshes the routine when it opens and on **Check updates**, keeping the latest 10 versions. Offline, the saved routine keeps working.
+- Periods you already marked keep the subject they had when marked, so timetable changes never rewrite your history.
+
+Backend: InsForge project `attend-routine` (ap-southeast). Schema and access rules are in `migrations/`. Clients read only their own classes and memberships; history and every write go through validated database functions. Limits: timetables ≤ 72 periods and 32 KB with no hidden/bidi characters; 3 new classes and 10 joins per user a day; 10 wrong join codes an hour; 5 publishes per member and 30 per class a day. Limits are not reset by deleting your class data. `app/routine.properties` holds the public base URL and anon key. The project admin key lives only in `.insforge/project.json`, which is git-ignored and must never be shared or bundled.
+
+## Privacy
+
+Attendance never leaves the phone: sheet numbers, P/A marks and activity hours are stored only in the app's Room database, and app cloud/device backups are excluded. The INTERNET permission is used only for the shared routine. Online, the backend stores your email (for sign-in), which classes you joined, and the timetables you publish. No analytics.
+
+**Clear my attendance data** deletes everything on the phone and signs out. **Delete my class-sharing data** removes you from every class and detaches your account from routine history.
 
 ## Source map
 
-- `core/`: counts, report reconciliation, timetable/calendar, forecast math, portal policy and conservative parser tests.
-- `app/`: Android UI, Room persistence, ERP WebView and visible-page capture.
-- `docs/SPEC.md`: accepted behavior and remaining live integration gate.
+- `core/`: counts, activity credit, monthly buckets, timetable/calendar and forecast math, with tests.
+- `app/`: Android UI, Room persistence and the routine REST client (`data/RoutineClient.kt`).
+- `migrations/`: backend schema, row-level security and routine functions.
+- `docs/SPEC.md`: accepted behavior.
+- `scripts/`: UI smoke scripts for 0.1/0.2; they reference the removed ERP screens and need rewriting for 0.3.
 
 No classmates' names or full attendance sheets are bundled into the app.

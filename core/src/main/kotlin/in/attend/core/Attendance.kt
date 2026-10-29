@@ -9,106 +9,11 @@ data class Counts(val attended: Long, val held: Long) {
     operator fun plus(other: Counts) = Counts(attended + other.attended, held + other.held)
 }
 
-data class StudentProfile(val name: String, val rollNumber: String, val semester: String, val course: String = "", val portalId: String? = null, val academicYear: String? = null) {
-    init { require(name.isNotBlank() && rollNumber.isNotBlank() && semester.isNotBlank()) { "ERP name, roll number and semester are required" } }
-    private fun clean(value: String) = value.trim().uppercase().replace(Regex("\\s+"), " ")
-    // Local roll numbers are not college-wide identifiers. Fall back conservatively to all visible discriminators.
-    val accountKey: String get() = portalId?.takeIf { it.isNotBlank() }?.let { "ERP:${clean(it)}" }
-        ?: "${clean(rollNumber)}|${clean(name)}|${clean(course)}"
-    val termKey: String get() = "$accountKey|${clean(course)}|${clean(semester)}|${academicYear?.let(::clean).orEmpty()}"
-}
-
-object StudentIdentity {
-    private fun same(a: String, b: String) = a.trim().replace(Regex("\\s+"), " ").equals(b.trim().replace(Regex("\\s+"), " "), true)
-    fun conflicts(a: StudentProfile, b: StudentProfile): Boolean =
-        !same(a.name, b.name) || !same(a.rollNumber, b.rollNumber) || !same(a.semester, b.semester) ||
-            (a.course.isNotBlank() && b.course.isNotBlank() && !same(a.course, b.course)) ||
-            (!a.portalId.isNullOrBlank() && !b.portalId.isNullOrBlank() && !same(a.portalId, b.portalId)) ||
-            (!a.academicYear.isNullOrBlank() && !b.academicYear.isNullOrBlank() && !same(a.academicYear, b.academicYear))
-
-    /** Retain optional metadata only after fresh complete identity agrees with every shared discriminator. */
-    fun reconcile(previous: StudentProfile, fresh: StudentProfile): StudentProfile = if (conflicts(previous, fresh)) fresh else fresh.copy(
-        course = fresh.course.ifBlank { previous.course }, portalId = fresh.portalId ?: previous.portalId,
-        academicYear = fresh.academicYear ?: previous.academicYear,
-    )
-}
-
-enum class ReportKind { PERIOD, CUMULATIVE }
 data class SubjectAttendance(val code: String, val name: String, val counts: Counts)
-data class AttendanceSnapshot(
-    val profile: StudentProfile,
-    val start: LocalDate?,
-    val end: LocalDate,
-    val kind: ReportKind,
-    val counts: Counts,
-    val subjects: List<SubjectAttendance>,
-    val fetchedAt: Instant,
-    val sourceUrl: String,
-    val termEnd: LocalDate? = null,
-) {
-    init {
-        require(start == null || !end.isBefore(start)) { "Reporting dates are reversed" }
-        require(kind == ReportKind.CUMULATIVE || start != null) { "Period report needs a start date" }
-        require(subjects.map { it.code }.distinct().size == subjects.size) { "Duplicate subject totals" }
-    }
-    val key: String get() = "${profile.termKey}|$kind|$start|$end"
-}
 
-data class Baseline(val counts: Counts, val subjects: List<SubjectAttendance>, val asOf: LocalDate, val termEnd: LocalDate? = null)
-
-object Ledger {
-    fun merge(existing: List<AttendanceSnapshot>, incoming: List<AttendanceSnapshot>): List<AttendanceSnapshot> {
-        require(incoming.isNotEmpty()) { "No attendance records found" }
-        val freshProfile = incoming.map { it.profile }.reduce { a, b ->
-            require(!StudentIdentity.conflicts(a, b)) { "Import contains more than one student or semester" }
-            StudentIdentity.reconcile(a, b)
-        }
-        val profile = existing.firstOrNull()?.profile?.let { StudentIdentity.reconcile(it, freshProfile) } ?: freshProfile
-        val normalizedIncoming = incoming.map { it.copy(profile = profile) }
-        val retained = existing.filter { old -> !StudentIdentity.conflicts(old.profile, profile) && normalizedIncoming.none { fresh ->
-            fresh.kind == ReportKind.PERIOD && old.kind == fresh.kind && old.start == fresh.start && old.end < fresh.end
-        } }.map { it.copy(profile = profile) }
-        normalizedIncoming.filter { fresh -> fresh.kind == ReportKind.PERIOD }.forEach { fresh ->
-            require(retained.none { old -> old.kind == fresh.kind && old.start == fresh.start && old.end > fresh.end }) { "This report is older than the saved version. Saved attendance was kept." }
-        }
-        normalizedIncoming.groupBy { it.key }.values.forEach { copies ->
-            require(copies.map { it.counts to it.subjects }.distinct().size == 1) { "Conflicting totals for the same reporting period" }
-        }
-        val merged = (retained + normalizedIncoming).associateBy { it.key }.values.sortedWith(compareBy({ it.end }, { it.kind.name }))
-        baseline(merged) // Reject inconsistent ranges before storage is changed.
-        return merged
-    }
-
-    fun baseline(reports: List<AttendanceSnapshot>): Baseline? {
-        if (reports.isEmpty()) return null
-        require(reports.map { it.profile.termKey }.distinct().size == 1) { "Mixed student records" }
-        val unique = reports.associateBy { it.key }.values
-        val periods = unique.filter { it.kind == ReportKind.PERIOD }.sortedBy { it.start }
-        periods.zipWithNext().forEach { (a, b) ->
-            require(b.start!!.isAfter(a.end)) { "Reporting periods overlap. Import a complete replacement report." }
-        }
-        val cumulative = unique.filter { it.kind == ReportKind.CUMULATIVE }.maxByOrNull { it.end }
-        val selected = if (cumulative == null) periods else {
-            periods.forEach {
-                require(!(it.start!! <= cumulative.end && it.end > cumulative.end)) { "Period partially overlaps cumulative attendance" }
-            }
-            listOf(cumulative) + periods.filter { it.start!!.isAfter(cumulative.end) }
-        }
-        if (selected.isEmpty()) return null
-        // A gap cannot be interpreted as zero classes. Do not present a partial sum as semester attendance.
-        selected.zipWithNext().forEach { (a, b) ->
-            require(b.start == a.end.plusDays(1)) { "Attendance history has a gap; import a cumulative report or missing period." }
-        }
-        val commonSubjects = selected.map { it.subjects.map { s -> s.code }.toSet() }.reduce { a, b -> a intersect b }
-        val subjects = commonSubjects.map { code ->
-            val values = selected.map { r -> r.subjects.first { it.code == code } }
-            values.first().copy(counts = values.map { it.counts }.reduce(Counts::plus))
-        }.sortedBy { it.name }
-        return Baseline(
-            selected.map { it.counts }.reduce(Counts::plus), subjects, selected.maxOf { it.end },
-            selected.mapNotNull { it.termEnd }.maxOrNull(),
-        )
-    }
+/** Counts the student copied from the college sheet. They cover every class up to and including [asOf]. [month] is that month's sheet total when known. */
+data class Baseline(val counts: Counts, val subjects: List<SubjectAttendance>, val asOf: LocalDate, val termEnd: LocalDate? = null, val month: Counts? = null) {
+    init { require(month == null || (month.attended <= counts.attended && month.held <= counts.held)) { "Month totals cannot exceed cumulative totals" } }
 }
 
 object AttendanceMath {
