@@ -34,6 +34,20 @@ private fun AttendApp(model: AttendViewModel = viewModel()) {
     var startingCounts by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(notice) { notice?.let { snackbar.showSnackbar(it); model.notice.value = null } }
+    // Draw nothing until saved data loads, so defaults never flash before the real state or the setup screen.
+    if (!ui.loaded) { Surface(Modifier.fillMaxSize()) {}; return }
+    if (!demo && !data.setupDone) {
+        Scaffold { padding ->
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                SetupScreen(data) { bps, style, hidden, reminder ->
+                    model.finishSetup(bps, style, hidden, reminder)
+                    page = 0
+                    if (data.manualBaseline == null) startingCounts = true
+                }
+            }
+        }
+        return
+    }
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
         NavigationBar {
             val labels = listOf("Today", "Calendar", "Activity", "Forecast", "Settings")
@@ -43,13 +57,14 @@ private fun AttendApp(model: AttendViewModel = viewModel()) {
     }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (page) {
-                0 -> Dashboard(data, demo, model::mark, model::showDemo, { page = 3 }, { page = 1 }, { page = 2 }, { startingCounts = true },
+                0 -> Dashboard(data, demo, model::mark, model::noClass, model::showDemo, { page = 3 }, { page = 1 }, { page = 2 }, { startingCounts = true },
                     model::acceptRoutine, model::dismissRoutine)
-                1 -> CalendarScreen(data, model::update, model::mark, { page = 3 })
+                1 -> CalendarScreen(data, model::update, model::mark, model::noClass, { page = 3 })
                 2 -> ActivityScreen(data, model::update)
                 3 -> ForecastScreen(data, { startingCounts = true }, { page = 1 })
                 4 -> SettingsScreen(data, demo, model::update, { model.clearData { page = 0 } }, { model.leaveDemo(); page = 0 },
-                    { sessions -> model.publishRoutine(sessions, java.time.LocalDate.now(), "Timetable edited") }) { ClassRoutineSection(data, demo, model) }
+                    { sessions -> model.publishRoutine(sessions, java.time.LocalDate.now(), "Timetable edited") },
+                    { PersonalSection(data, model::setMarkingStyle, model::setHiddenSubjects, model::setReminder) }) { ClassRoutineSection(data, demo, model) }
             }
         }
     }

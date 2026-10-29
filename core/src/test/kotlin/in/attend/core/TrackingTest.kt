@@ -4,6 +4,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.YearMonth
 
 class TrackingTest : FunSpec({
@@ -84,5 +85,58 @@ class TrackingTest : FunSpec({
     test("marks in the sheet month after its date extend that month") {
         val base = Baseline(Counts(150, 170), emptyList(), friday.minusDays(1), month = Counts(30, 33))
         summarize(listOf(AttendanceEntry(friday, slots[0].id, AttendanceMark.PRESENT)), base).month(YearMonth.from(friday)) shouldBe Counts(31, 34)
+    }
+    // Present by default. Friday slots end 09:50, 10:45, 11:40, 13:00, 13:55.
+    fun assume(entries: List<AttendanceEntry> = emptyList(), base: Baseline? = null, rules: List<CalendarException> = emptyList(),
+               now: LocalTime = LocalTime.MAX, hidden: Set<String> = emptySet(), started: LocalDate? = friday) =
+        AttendanceTracker.summarize(base, entries, SeedTimetable.sessions, rules, friday, started, assumeFrom = friday, now = now, hiddenSubjects = hidden)
+
+    test("finished periods count as present without a tap; later periods today wait") {
+        val midMorning = assume(now = LocalTime.of(11, 0))
+        midMorning.baseline!!.counts shouldBe Counts(2, 2)
+        midMorning.assumed shouldBe 2
+        midMorning.unmarked shouldBe 0
+        assume(now = LocalTime.of(10, 45)).baseline!!.counts shouldBe Counts(2, 2)
+        assume().baseline!!.counts shouldBe Counts(5, 5)
+        assume(now = LocalTime.of(8, 0)).baseline shouldBe null
+    }
+    test("assumed periods add to the sheet totals; the sheet date still supersedes") {
+        val sheet = Baseline(Counts(161, 185), emptyList(), friday.minusDays(1), month = null)
+        assume(base = sheet).baseline!!.counts shouldBe Counts(166, 190)
+        assume(base = sheet.copy(asOf = friday)).baseline!!.counts shouldBe Counts(161, 185)
+    }
+    test("an explicit A overrides the assumed present and is never counted twice") {
+        val summary = assume(listOf(AttendanceEntry(friday, slots[0].id, AttendanceMark.ABSENT, slots[0])))
+        summary.baseline!!.counts shouldBe Counts(4, 5)
+        summary.assumed shouldBe 4
+    }
+    test("No class removes the period from held; a past planned absence counts absent") {
+        val noClass = CalendarException("nc", friday, friday, ExceptionKind.CANCELLATION, "No class", slots[1].id)
+        assume(rules = listOf(noClass)).baseline!!.counts shouldBe Counts(4, 4)
+        val leave = CalendarException("leave", friday, friday, ExceptionKind.ABSENCE, "Leave", slots[2].id)
+        assume(rules = listOf(leave)).baseline!!.counts shouldBe Counts(4, 5)
+    }
+    test("hidden subjects are never assumed or counted unmarked, but saved marks for them still count") {
+        assume(hidden = setOf("IFS")).baseline!!.counts shouldBe Counts(3, 3)
+        val marked = assume(listOf(AttendanceEntry(friday, slots[0].id, AttendanceMark.ABSENT, slots[0])), hidden = setOf("IFS"))
+        marked.baseline!!.counts shouldBe Counts(3, 4)
+        AttendanceTracker.summarize(null, emptyList(), SeedTimetable.sessions, emptyList(), friday, friday, hiddenSubjects = setOf("IFS")).unmarked shouldBe 3
+    }
+    test("days before present-by-default started stay unmarked, never assumed") {
+        val summary = assume(started = friday.minusDays(1))
+        summary.baseline!!.counts shouldBe Counts(5, 5)
+        summary.unmarked shouldBe 4 // Thursday's periods
+    }
+    test("month totals include assumed periods") {
+        assume(now = LocalTime.of(11, 0)).month(YearMonth.from(friday)) shouldBe Counts(2, 2)
+    }
+    test("end times are read from the period label; unreadable labels wait until the next day") {
+        AttendanceTracker.endTime(slots[0]) shouldBe LocalTime.of(9, 50)
+        AttendanceTracker.endTime(slots[0].copy(time = "1:05 - 1:55")) shouldBe LocalTime.of(1, 55)
+        val vague = slots[0].copy(time = "Morning")
+        AttendanceTracker.assumedMark(friday, vague, emptyList(), friday, null, friday, LocalTime.MAX) shouldBe null
+        AttendanceTracker.assumedMark(friday, vague, emptyList(), friday, null, friday.plusDays(1), LocalTime.MIN) shouldBe AttendanceMark.PRESENT
+        AttendanceTracker.assumedMark(friday, slots[0], emptyList(), null, null, friday, LocalTime.MAX) shouldBe null
+        AttendanceTracker.assumedEntries(null, emptyList(), SeedTimetable.sessions, emptyList(), friday, friday.plusDays(1), LocalTime.MAX) shouldBe emptyList()
     }
 })

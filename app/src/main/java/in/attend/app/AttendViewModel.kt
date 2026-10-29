@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import `in`.attend.app.data.AppData
+import `in`.attend.app.reminder.Reminders
 import `in`.attend.core.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -36,16 +37,37 @@ class AttendViewModel(application: Application) : AndroidViewModel(application) 
         if (date > LocalDate.now()) return
         update { old -> old.withMarks(date, sessionIds, mark) }
     }
+    fun noClass(date: LocalDate, session: WeekSession, on: Boolean) {
+        if (date > LocalDate.now()) return
+        update { it.withNoClass(date, session, on) }
+    }
+    fun setMarkingStyle(style: MarkingStyle) = update { it.withMarkingStyle(style) }
+    fun setHiddenSubjects(subjects: Set<String>) = update { it.copy(hiddenSubjects = subjects) }
+    fun setReminder(time: LocalTime?) {
+        update { it.copy(reminderTime = time) }
+        if (demoData.value == null) Reminders.schedule(getApplication(), time)
+    }
+    /** First-run choices; each student's setup stays on their own phone. */
+    fun finishSetup(targetBps: Int, style: MarkingStyle, hidden: Set<String>, reminder: LocalTime?) {
+        update { it.copy(targetBps = targetBps, hiddenSubjects = hidden, reminderTime = reminder, setupDone = true).withMarkingStyle(style) }
+        Reminders.schedule(getApplication(), reminder)
+    }
+
     fun clearData(done: () -> Unit) {
         viewModelScope.launch {
-            repository.clear(); routine.forget(); account.value = null; demoData.value = null
+            repository.clear(); routine.forget(); Reminders.schedule(getApplication(), null); account.value = null; demoData.value = null
             notice.value = "Your attendance data was cleared from this device."; done()
         }
     }
 
     init {
         // Refresh the shared routine on app open; offline keeps the saved copy.
-        viewModelScope.launch { ui.first { it.loaded }; syncRoutine(quiet = true) }
+        viewModelScope.launch {
+            val first = ui.first { it.loaded }
+            // Force-stopping the app clears its alarms; opening it re-arms the reminder.
+            Reminders.schedule(getApplication(), first.data.reminderTime)
+            syncRoutine(quiet = true)
+        }
     }
 
     private fun online(success: String? = null, block: suspend () -> Unit) {
@@ -104,7 +126,8 @@ class AttendViewModel(application: Application) : AndroidViewModel(application) 
                 SubjectAttendance("SAPM", "Security Analysis & Portfolio Management", Counts(29, 32)),
             )
             val sheet = Baseline(Counts(161, 185), subjects, LocalDate.parse("2026-09-30"), month = Counts(43, 45))
-            return AppData(manualBaseline = sheet, activity = listOf(ActivityEntry("demo", LocalDate.parse("2026-10-10"), 6, "College fest volunteering")))
+            return AppData(setupDone = true, markingStyle = MarkingStyle.ASSUME_PRESENT, assumePresentFrom = LocalDate.now().minusDays(7),
+                manualBaseline = sheet, activity = listOf(ActivityEntry("demo", LocalDate.parse("2026-10-10"), 6, "College fest volunteering")))
         }
     }
 }

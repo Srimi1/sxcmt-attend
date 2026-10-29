@@ -2,9 +2,16 @@
 
 An Android attendance planner for SXCMT / Xavier University, Patna. Native Kotlin, Compose Material 3, Room and a separately tested JVM calculation module. Requires Android 8.0 or newer.
 
-[Download Attend 0.2.1](https://github.com/Srimi1/sxcmt-attend/releases/download/v0.2.1/Attend-0.2.1-debug.apk) · [App preview](artifacts/v0.2.1/overview.png) · [Verification results](docs/VERIFICATION-v0.2.1.md)
+[Download Attend 0.4.0](https://github.com/Srimi1/sxcmt-attend/releases/download/v0.4.0/Attend-0.4.0-debug.apk) · [App preview](artifacts/v0.4.0/today-present-by-default.png) · [Release notes](artifacts/v0.4.0/release-notes.md)
 
 ## Current status
+
+Version 0.4.0 makes the app fit each student. A one-time setup asks for your minimum, how you mark, the subjects you take and a reminder time; all of it can be changed later in Settings and stays on your phone.
+
+- **Present by default** (recommended): finished periods count as present on their own. Tap **A** when you miss one, or **No class** when it wasn't held. Counting starts the day you turn it on, a period only counts after it ends, and planned leave counts as absent. Days before that stay unmarked rather than guessed.
+- **Mark every period**: only periods you tap count. Switching to this keeps everything already counted, as saved marks.
+- **Subjects you take**: untick electives or groups that aren't yours; they're hidden on your phone and never counted.
+- **Daily reminder**: an offline "Any absences today?" notification at your chosen time, on teaching days only.
 
 Version 0.3.0 removes the college ERP integration completely. The ERP's numbers were not reliable and its live import was never verified, so the app no longer opens, reads or depends on the ERP in any way. Attendance is self-service:
 
@@ -42,7 +49,7 @@ The Gradle wrapper pins Gradle 8.13 and verifies the distribution SHA-256. Maven
 ## Use
 
 1. Install the APK. Tap **Enter sheet numbers** and copy your cumulative attended / held and the sheet's end date. Check the preview percentage matches the sheet's Cum_% column.
-2. Each teaching day, tap **P** or **A** for each period on the Today screen. Tap a chip again to clear it. Unmarked periods never count.
+2. Each teaching day, check the Today screen. With present by default, finished periods already count; tap **A** for any you missed or **No class** if it wasn't held. With mark every period, tap **P** or **A** for each one. Tap a chip again to clear it.
 3. Add extracurricular hours in **Activity**. The dashboard shows class-only and with-activity percentages separately.
 4. For future dates, plan absences or add holidays, leave or cancellations in Calendar. **Forecast** compares your plan with attending everything.
 

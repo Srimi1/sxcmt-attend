@@ -125,6 +125,44 @@ class RepositoryInstrumentedTest {
         assertEquals(maxCounts, repo.data.first().baseline!!.counts)
         assertTrue(repo.data.first().entries.isEmpty())
     }
+    @Test fun personalSetupRoundTripsAndOlderStateNeedsSetup() = runBlocking {
+        repo.update { it.copy(hiddenSubjects = setOf("FM"), reminderTime = LocalTime.of(17, 30), setupDone = true).withMarkingStyle(MarkingStyle.ASSUME_PRESENT, LocalDate.parse("2026-10-20")) }
+        val saved = repo.data.first()
+        assertEquals(MarkingStyle.ASSUME_PRESENT, saved.markingStyle)
+        assertEquals(LocalDate.parse("2026-10-20"), saved.assumePresentFrom)
+        assertEquals(setOf("FM"), saved.hiddenSubjects)
+        assertEquals(LocalTime.of(17, 30), saved.reminderTime)
+        assertTrue(saved.setupDone)
+        assertEquals(saved, StateCodec.decode(StateCodec.encode(saved)))
+        val v030 = JSONObject(StateCodec.encode(AppData()))
+        listOf("markingStyle", "assumeFrom", "hiddenSubjects", "reminder", "setupDone").forEach(v030::remove)
+        val old = StateCodec.decode(v030.toString())
+        assertEquals(MarkingStyle.MARK_EACH, old.markingStyle)
+        assertFalse(old.setupDone)
+    }
+    @Test fun leavingPresentByDefaultKeepsWhatWasCounted() {
+        val friday = LocalDate.parse("2026-10-16")
+        val data = AppData(rules = emptyList(), manualBaseline = Baseline(Counts(10, 10), emptyList(), friday.minusDays(1)))
+            .withMarkingStyle(MarkingStyle.ASSUME_PRESENT, friday)
+        val counted = data.tracking(friday, LocalTime.MAX).baseline!!.counts
+        assertEquals(Counts(15, 15), counted)
+        val switched = data.withMarkingStyle(MarkingStyle.MARK_EACH, friday, LocalTime.MAX)
+        assertEquals(counted, switched.tracking(friday, LocalTime.MAX).baseline!!.counts)
+        assertEquals(5, switched.entries.size)
+        assertNull(switched.assumePresentFrom)
+    }
+    @Test fun noClassDropsTheMarkAndTheHeldCountAndCanBeUndone() {
+        val friday = LocalDate.parse("2026-10-16")
+        val slot = SeedTimetable.sessions.first { it.day == friday.dayOfWeek }
+        val data = AppData(rules = emptyList(), manualBaseline = Baseline(Counts(10, 10), emptyList(), friday.minusDays(1)))
+            .withMarkingStyle(MarkingStyle.ASSUME_PRESENT, friday).withMarks(friday, setOf(slot.id), AttendanceMark.ABSENT)
+        val cancelled = data.withNoClass(friday, slot, true)
+        assertTrue(cancelled.isNoClass(friday, slot.id))
+        assertTrue(cancelled.entries.isEmpty())
+        assertEquals(Counts(14, 14), cancelled.tracking(friday, LocalTime.MAX).baseline!!.counts)
+        assertTrue(cancelled.periodsOn(friday).any { it.session.id == slot.id })
+        assertEquals(Counts(15, 15), cancelled.withNoClass(friday, slot, false).tracking(friday, LocalTime.MAX).baseline!!.counts)
+    }
     private fun sheet() = Baseline(Counts(161, 185), listOf(SubjectAttendance("RETAIL", "Retail Management", Counts(8, 9))),
         LocalDate.parse("2026-09-30"), month = Counts(43, 45))
 }

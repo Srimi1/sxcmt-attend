@@ -1,5 +1,14 @@
 # Attendance Predictor
 
+## Personal setup — v0.4.0, 29 October 2026
+
+- First run (and once for upgraded installs) shows setup: minimum %, marking style, subjects you take, daily reminder. All are per-device and editable in Settings.
+- Present by default: an unmarked period counts present when its date is on or after the day the mode was turned on, after the sheet date, and (if today) its end time has passed; unreadable times wait a day. Explicit marks win. A past planned absence counts absent. Earlier unmarked days stay unmarked.
+- No class: a per-period cancellation for that date; removes the period from held and drops any mark; can be undone.
+- Hidden subjects are never generated (not assumed, not unmarked); saved marks for them still count.
+- Switching back to mark-each converts assumed periods into saved PRESENT marks so counts don't change.
+- Daily reminder: inexact alarm at the chosen time, teaching days only, re-armed after reboot and on app open. No network.
+
 ## Self-service update — v0.3.0, 29 October 2026
 
 ERP is removed entirely: no WebView, parser, import, stored reports or INTERNET permission. The app must never depend on ERP. Where earlier sections mention ERP, they are superseded.
