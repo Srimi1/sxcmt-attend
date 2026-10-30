@@ -44,6 +44,7 @@ data class AppData(
     val dismissedRoutineVersion: Int? = null,
     val markingStyle: MarkingStyle = MarkingStyle.MARK_EACH,
     val assumePresentFrom: LocalDate? = null,
+    val assumeAfter: LocalDateTime? = null,
     val hiddenSubjects: Set<String> = emptySet(),
     val reminderTime: LocalTime? = null,
     val setupDone: Boolean = false,
@@ -54,8 +55,11 @@ data class AppData(
      */
     fun withRoutine(link: ClassLink, versions: List<RoutineVersion>, today: LocalDate = LocalDate.now()): AppData {
         val kept = versions.sortedByDescending { it.version }.take(RoutineClient.HISTORY_LIMIT)
-        val apply = Routines.autoApply(kept, appliedRoutineVersion, today)
-        return copy(classLink = link, routineVersions = kept, schedule = apply?.sessions ?: schedule, appliedRoutineVersion = apply?.version ?: appliedRoutineVersion)
+        val sameClass = classLink?.id == link.id
+        val applied = appliedRoutineVersion.takeIf { sameClass }
+        val apply = Routines.autoApply(kept, applied, today)
+        return copy(classLink = link, routineVersions = kept, schedule = apply?.sessions ?: schedule,
+            appliedRoutineVersion = apply?.version ?: applied, dismissedRoutineVersion = dismissedRoutineVersion.takeIf { sameClass })
     }
     fun pendingRoutine(today: LocalDate = LocalDate.now()) = Routines.pending(routineVersions, appliedRoutineVersion, dismissedRoutineVersion, today)
     fun acceptRoutine(version: RoutineVersion) = copy(schedule = version.sessions, appliedRoutineVersion = version.version)
@@ -63,13 +67,14 @@ data class AppData(
     val sheetBaseline: Baseline? get() = manualBaseline?.let { it.copy(termEnd = teachingEnd ?: it.termEnd) }
     /** The weekly timetable minus subjects this student doesn't take. */
     val mySchedule: List<WeekSession> get() = schedule.filter { it.subject !in hiddenSubjects }
+    fun forecast(base: Baseline, target: LocalDate, scenario: Scenario) = ForecastEngine.forecast(base, target, scenario, mySchedule, rules)
     private val assumeFrom: LocalDate? get() = assumePresentFrom.takeIf { markingStyle == MarkingStyle.ASSUME_PRESENT }
     fun tracking(today: LocalDate = LocalDate.now(), now: LocalTime = LocalTime.now()) =
-        AttendanceTracker.summarize(sheetBaseline, entries, schedule, rules, today, trackingStarted, assumeFrom, now, hiddenSubjects)
+        AttendanceTracker.summarize(sheetBaseline, entries, schedule, rules, today, trackingStarted, assumeFrom, now, hiddenSubjects, teachingEnd ?: manualBaseline?.termEnd, assumeAfter)
 
     /** The mark a period shows without a tap (present by default), or null. */
     fun assumedMark(date: LocalDate, session: WeekSession, today: LocalDate = LocalDate.now(), now: LocalTime = LocalTime.now()) =
-        AttendanceTracker.assumedMark(date, session, rules, assumeFrom, sheetBaseline?.asOf, today, now)
+        AttendanceTracker.assumedMark(date, session, rules, assumeFrom, sheetBaseline?.asOf, today, now, assumeAfter)
 
     private fun isNoClassRule(rule: CalendarException, date: LocalDate, sessionId: String) =
         rule.kind == ExceptionKind.CANCELLATION && rule.sessionId == sessionId && rule.start == date && rule.end == date
@@ -91,9 +96,24 @@ data class AppData(
         style == MarkingStyle.ASSUME_PRESENT -> copy(markingStyle = style, assumePresentFrom = today,
             trackingStarted = trackingStarted?.let { minOf(it, today) } ?: today)
         else -> {
-            val kept = AttendanceTracker.assumedEntries(sheetBaseline, entries.filter { it.date <= today }, mySchedule, rules, today, assumeFrom, now)
+            val kept = AttendanceTracker.assumedEntries(sheetBaseline, entries.filter { it.date <= today }, mySchedule, rules, today, assumeFrom, now, teachingEnd ?: manualBaseline?.termEnd, assumeAfter)
             copy(markingStyle = style, assumePresentFrom = null, entries = entries + kept)
         }
+    }
+    /** Freeze already-counted periods before a timetable edit; new slots must not backfill old dates. */
+    fun preserveCountedHistory(previous: AppData, today: LocalDate = LocalDate.now(), now: LocalTime = LocalTime.now()): AppData {
+        if (schedule == previous.schedule) return this
+        val counted = AttendanceTracker.assumedEntries(previous.sheetBaseline, previous.entries, previous.mySchedule,
+            previous.rules, today, previous.assumeFrom, now, previous.teachingEnd ?: previous.manualBaseline?.termEnd, previous.assumeAfter)
+        val oldEntries = previous.entries.associateBy { it.date to it.sessionId }
+        val preserved = entries.map { entry ->
+            if (entry.sessionSnapshot != null || (entry.date to entry.sessionId) !in oldEntries) entry
+            else entry.copy(sessionSnapshot = oldEntries[entry.date to entry.sessionId]?.sessionSnapshot
+                ?: previous.schedule.firstOrNull { it.id == entry.sessionId })
+        }
+        val explicit = preserved.map { it.date to it.sessionId }.toSet()
+        return copy(entries = preserved + counted.filterNot { (it.date to it.sessionId) in explicit },
+            assumeAfter = maxOf(previous.assumeAfter ?: LocalDateTime.MIN, LocalDateTime.of(today, now)))
     }
     val baseline: Baseline? get() = tracking().baseline
     fun activityCredit(classes: Counts) = ActivityMath.credit(classes, ActivityMath.totalHours(activity), lecturesPerHour)
@@ -114,7 +134,7 @@ class AttendRepository(private val database: AttendDatabase) {
     suspend fun update(transform: (AppData) -> AppData) = mutex.withLock {
         database.withTransaction {
             val previous = database.stateDao().read()?.let { StateCodec.decode(it.payload) } ?: AppData()
-            val updated = transform(previous)
+            val updated = transform(previous).preserveCountedHistory(previous)
             updated.baseline // Validate combined counts before persisting a change.
             database.stateDao().write(StoredState(payload = StateCodec.encode(updated)))
         }
@@ -129,11 +149,11 @@ object StateCodec {
     private fun decodeCounts(j: JSONObject) = Counts(j.getLong("attended"), j.getLong("held"))
     private fun session(s: WeekSession) = JSONObject().put("id", s.id).put("day", s.day.value).put("period", s.period).put("subject", s.subject).put("title", s.title).put("time", s.time)
     private fun decodeSession(s: JSONObject) = WeekSession(s.getString("id"), DayOfWeek.of(s.getInt("day")), s.getInt("period"), s.getString("subject"), s.getString("title"), s.getString("time"))
-    private fun baseline(b: Baseline) = JSONObject().put("counts", counts(b.counts)).put("asOf", b.asOf.toString()).put("month", b.month?.let(::counts))
+    private fun baseline(b: Baseline) = JSONObject().put("counts", counts(b.counts)).put("asOf", b.asOf.toString()).put("termEnd", b.termEnd?.toString()).put("month", b.month?.let(::counts))
         .put("subjects", array(b.subjects.map { s -> JSONObject().put("code", s.code).put("name", s.name).put("counts", counts(s.counts)) }))
     private fun decodeBaseline(j: JSONObject) = Baseline(decodeCounts(j.getJSONObject("counts")),
         j.optJSONArray("subjects")?.objects()?.map { s -> SubjectAttendance(s.getString("code"), s.getString("name"), decodeCounts(s.getJSONObject("counts"))) }.orEmpty(),
-        LocalDate.parse(j.getString("asOf")), month = j.optJSONObject("month")?.let(::decodeCounts))
+        LocalDate.parse(j.getString("asOf")), termEnd = j.nullable("termEnd")?.let(LocalDate::parse), month = j.optJSONObject("month")?.let(::decodeCounts))
     fun encode(data: AppData): String = JSONObject().apply {
         put("calendarRevision", 1)
         put("trackingStarted", data.trackingStarted?.toString())
@@ -142,7 +162,7 @@ object StateCodec {
         put("target", data.targetBps); put("teachingEnd", data.teachingEnd?.toString())
         put("activity", array(data.activity.map { JSONObject().put("id", it.id).put("date", it.date.toString()).put("hours", it.hours).put("label", it.label) }))
         put("lecturesPerHour", data.lecturesPerHour)
-        put("markingStyle", data.markingStyle.name); put("assumeFrom", data.assumePresentFrom?.toString())
+        put("markingStyle", data.markingStyle.name); put("assumeFrom", data.assumePresentFrom?.toString()); put("assumeAfter", data.assumeAfter?.toString())
         put("hiddenSubjects", array(data.hiddenSubjects)); put("reminder", data.reminderTime?.toString()); put("setupDone", data.setupDone)
         put("classLink", data.classLink?.let { JSONObject().put("id", it.id).put("name", it.name).put("code", it.joinCode).put("owner", it.isOwner) })
         put("appliedRoutine", data.appliedRoutineVersion); put("dismissedRoutine", data.dismissedRoutineVersion)
@@ -168,13 +188,16 @@ object StateCodec {
             lecturesPerHour = j.optInt("lecturesPerHour", 1).coerceIn(1, 10),
             markingStyle = runCatching { MarkingStyle.valueOf(j.getString("markingStyle")) }.getOrDefault(MarkingStyle.MARK_EACH),
             assumePresentFrom = j.nullable("assumeFrom")?.let(LocalDate::parse),
+            assumeAfter = j.nullable("assumeAfter")?.let(LocalDateTime::parse),
             hiddenSubjects = j.optJSONArray("hiddenSubjects")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty(),
             reminderTime = j.nullable("reminder")?.let { runCatching { LocalTime.parse(it) }.getOrNull() },
             setupDone = j.optBoolean("setupDone", false),
             // Shared-routine data comes from classmates; if it cannot be read, drop it rather than lose attendance.
             classLink = runCatching { j.optJSONObject("classLink")?.let { ClassLink(it.getString("id"), it.getString("name"), it.getString("code"), it.optBoolean("owner")) } }.getOrNull(),
-            routineVersions = j.optJSONArray("routineVersions")?.objects()?.mapNotNull { v -> runCatching { RoutineVersion(v.getInt("version"), LocalDate.parse(v.getString("from")),
-                v.getJSONArray("sessions").objects().map(::decodeSession), v.optString("note"), v.optBoolean("mine"), Instant.parse(v.getString("at"))) }.getOrNull() }.orEmpty(),
+            routineVersions = j.optJSONArray("routineVersions")?.let { versions -> (0 until versions.length()).mapNotNull { index -> runCatching {
+                val v = versions.getJSONObject(index)
+                RoutineVersion(v.getInt("version"), LocalDate.parse(v.getString("from")),
+                v.getJSONArray("sessions").objects().map(::decodeSession), v.optString("note"), v.optBoolean("mine"), Instant.parse(v.getString("at"))) }.getOrNull() } }.orEmpty(),
             appliedRoutineVersion = j.optInt("appliedRoutine", -1).takeIf { it > 0 },
             dismissedRoutineVersion = j.optInt("dismissedRoutine", -1).takeIf { it > 0 },
         )

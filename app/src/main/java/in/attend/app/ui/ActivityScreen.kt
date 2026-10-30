@@ -19,7 +19,8 @@ import java.util.UUID
 fun ActivityScreen(data: AppData, update: ((AppData) -> AppData) -> Unit) {
     var editing by remember { mutableStateOf<ActivityEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
-    val classes = data.baseline?.counts
+    val now = LocalAttendanceTime.current
+    val classes = data.tracking(now.toLocalDate(), now.toLocalTime()).baseline?.counts
     Page("Activity hours", "Extracurricular / counted separately") {
         val total = ActivityMath.totalHours(data.activity)
         if (classes != null) {

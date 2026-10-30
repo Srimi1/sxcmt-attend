@@ -13,14 +13,36 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import `in`.attend.app.ui.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import java.time.LocalDateTime
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { AttendTheme { AttendApp() } }
+        setContent {
+            AttendTheme {
+                val lifecycle = LocalLifecycleOwner.current.lifecycle
+                val now by produceState(LocalDateTime.now(), lifecycle) {
+                    // Refresh immediately on foregrounding and at each minute boundary while visible.
+                    // Attendance changes when periods end and at midnight, even without a database write.
+                    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        while (isActive) {
+                            val current = LocalDateTime.now()
+                            value = current
+                            delay(60_000L - current.second * 1_000L - current.nano / 1_000_000L)
+                        }
+                    }
+                }
+                CompositionLocalProvider(LocalAttendanceTime provides now) { AttendApp() }
+            }
+        }
     }
 }
 

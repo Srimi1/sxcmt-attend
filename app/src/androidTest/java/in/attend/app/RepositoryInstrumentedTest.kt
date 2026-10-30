@@ -36,6 +36,16 @@ class RepositoryInstrumentedTest {
         assertEquals(LocalDate.parse("2026-12-10"), saved.baseline!!.termEnd)
         assertEquals(saved, StateCodec.decode(StateCodec.encode(saved)))
     }
+    @Test fun baselineTeachingEndSurvivesSavingWithoutAnOverride() = runBlocking {
+        val end = LocalDate.parse("2026-10-15")
+        val baseline = sheet().copy(termEnd = end)
+        repo.update { it.copy(manualBaseline = baseline, rules = emptyList()) }
+        val saved = repo.data.first()
+        assertEquals(baseline, saved.manualBaseline)
+        assertEquals(end, saved.sheetBaseline!!.termEnd)
+        assertTrue(saved.periodsOn(end.plusDays(1)).isEmpty())
+        assertEquals(saved, StateCodec.decode(StateCodec.encode(saved)))
+    }
     @Test fun sheetSubjectsAndMonthTotalsSurviveSaving() = runBlocking {
         repo.update { it.copy(manualBaseline = sheet()) }
         val saved = repo.data.first().manualBaseline!!
@@ -162,6 +172,115 @@ class RepositoryInstrumentedTest {
         assertEquals(Counts(14, 14), cancelled.tracking(friday, LocalTime.MAX).baseline!!.counts)
         assertTrue(cancelled.periodsOn(friday).any { it.session.id == slot.id })
         assertEquals(Counts(15, 15), cancelled.withNoClass(friday, slot, false).tracking(friday, LocalTime.MAX).baseline!!.counts)
+    }
+    @Test fun hiddenSubjectsDoNotReappearInForecastButSavedMarksRemain() {
+        val friday = LocalDate.parse("2026-10-16")
+        val slot = SeedTimetable.sessions.first { it.day == friday.dayOfWeek }
+        val data = AppData(rules = emptyList()).withMarks(friday, setOf(slot.id), AttendanceMark.PRESENT)
+            .copy(hiddenSubjects = setOf(slot.subject))
+        val base = data.tracking(friday).baseline!!
+        assertEquals(Counts(1, 1), base.counts)
+        val forecast = data.forecast(base, friday.plusDays(7), Scenario.ATTEND_ALL)
+        assertTrue(forecast.subjects.none { it.code == slot.subject })
+        assertEquals(TeachingCalendar.generate(friday.plusDays(1), friday.plusDays(7), data.mySchedule, data.rules).size, forecast.futureHeld)
+        assertTrue(forecast.futureHeld < ForecastEngine.forecast(base, friday.plusDays(7), Scenario.ATTEND_ALL, data.schedule, data.rules).futureHeld)
+    }
+    @Test fun subjectInputParsingKeepsValuesAndRejectsPartialOrInvalidRows() {
+        val subjects = listOf("A" to "Subject A", "B" to "Subject B")
+        assertEquals(listOf(SubjectAttendance("A", "Subject A", Counts(3, 4))),
+            `in`.attend.app.ui.parseSheetSubjects(subjects, mapOf("A" to ("3" to "4"), "B" to ("" to ""))).getOrThrow())
+        assertTrue(`in`.attend.app.ui.parseSheetSubjects(subjects, mapOf("A" to ("3" to ""))).isFailure)
+        assertTrue(`in`.attend.app.ui.parseSheetSubjects(subjects, mapOf("A" to ("5" to "4"))).isFailure)
+    }
+    @Test fun malformedCachedRoutineEntriesDoNotHideAttendance() {
+        val version = RoutineVersion(1, LocalDate.parse("2026-10-01"), SeedTimetable.sessions, "", false, Instant.EPOCH)
+        val data = AppData(manualBaseline = sheet(), routineVersions = listOf(version))
+        val payload = JSONObject(StateCodec.encode(data))
+        payload.getJSONArray("routineVersions").put(JSONObject.NULL).put("invalid").put(JSONObject().put("version", 2))
+        val decoded = StateCodec.decode(payload.toString())
+        assertEquals(sheet(), decoded.manualBaseline)
+        assertEquals(listOf(version), decoded.routineVersions)
+    }
+    @Test fun timetableEditsFreezePastAssumptionsWithoutBackfillingNewPeriods() {
+        val friday = LocalDate.parse("2026-10-16")
+        val morning = WeekSession("old-morning", DayOfWeek.FRIDAY, 1, "OLD", "Old subject", "09:00–10:00")
+        val afternoon = WeekSession("old-afternoon", DayOfWeek.FRIDAY, 2, "OLD", "Old subject", "14:00–15:00")
+        val before = AppData(schedule = listOf(morning, afternoon), rules = emptyList())
+            .withMarkingStyle(MarkingStyle.ASSUME_PRESENT, friday.minusDays(7))
+        assertEquals(Counts(3, 3), before.tracking(friday, LocalTime.NOON).baseline!!.counts)
+        val after = before.copy(schedule = listOf(morning.copy(id = "new-morning", subject = "NEW", title = "New subject"),
+            afternoon.copy(id = "new-afternoon", subject = "NEW", title = "New subject")))
+            .preserveCountedHistory(before, friday, LocalTime.NOON)
+        assertEquals(Counts(3, 3), after.tracking(friday, LocalTime.NOON).baseline!!.counts)
+        assertEquals(Counts(4, 4), after.tracking(friday, LocalTime.MAX).baseline!!.counts)
+        assertEquals(3, after.entries.size)
+        assertTrue(after.entries.all { it.sessionSnapshot?.subject == "OLD" })
+        assertEquals(after, StateCodec.decode(StateCodec.encode(after)))
+        val deleted = after.copy(schedule = emptyList()).preserveCountedHistory(after, friday, LocalTime.MAX)
+        assertEquals(Counts(4, 4), deleted.tracking(friday, LocalTime.MAX).baseline!!.counts)
+        assertEquals(Counts(4, 4), deleted.withMarkingStyle(MarkingStyle.MARK_EACH, friday, LocalTime.MAX)
+            .tracking(friday, LocalTime.MAX).baseline!!.counts)
+    }
+    @Test fun switchingClassesDoesNotReuseAnotherClassesVersionCounters() {
+        val today = LocalDate.parse("2026-10-16")
+        val a = ClassLink("a", "Class A", "AAAAAAAAAA")
+        val b = ClassLink("b", "Class B", "BBBBBBBBBB")
+        val old = AppData(classLink = a, appliedRoutineVersion = 1, dismissedRoutineVersion = 2)
+        val newSchedule = listOf(WeekSession("new", DayOfWeek.FRIDAY, 1, "NEW", "New", "09:00–10:00"))
+        val version = RoutineVersion(1, today, newSchedule, "", false, Instant.EPOCH)
+        val joined = old.withRoutine(b, listOf(version), today)
+        assertEquals(newSchedule, joined.schedule)
+        assertEquals(1, joined.appliedRoutineVersion)
+        assertNull(joined.dismissedRoutineVersion)
+    }
+    @Test fun editingTimetableSnapshotsLegacyMarksBeforeReplacingTheirSubjects() {
+        val friday = LocalDate.parse("2026-10-16")
+        val slot = SeedTimetable.sessions.first { it.day == friday.dayOfWeek }
+        val before = AppData(rules = emptyList(), entries = listOf(AttendanceEntry(friday, slot.id, AttendanceMark.PRESENT)))
+        val after = before.copy(schedule = before.schedule.map { if (it.id == slot.id) it.copy(subject = "NEW", title = "New") else it })
+            .preserveCountedHistory(before, friday, LocalTime.MAX)
+        assertEquals(slot, after.entries.single().sessionSnapshot)
+        assertEquals(slot.subject, after.tracking(friday).baseline!!.subjects.single().code)
+    }
+    @Test fun invalidatedRoutineResultCannotRestoreClearedClassState() = runBlocking {
+        val revisions = RoutineRevision()
+        val pending = revisions.current()
+        val link = ClassLink("a", "Class A", "AAAAAAAAAA")
+        repo.update { it.copy(classLink = link) }
+        revisions.invalidate()
+        repo.clear()
+        // The revision check is inside the serialized update, not before its suspension point.
+        repo.update { if (revisions.isCurrent(pending)) it.copy(classLink = link) else it }
+        assertNull(repo.data.first().classLink)
+        val current = revisions.current()
+        assertTrue(revisions.isCurrent(current))
+        revisions.invalidate()
+        assertFalse(revisions.isCurrent(current))
+    }
+    @Test fun markingStyleRoundTripDoesNotForgetTimetableAssumptionCutoff() {
+        val friday = LocalDate.parse("2026-10-16")
+        val slot = WeekSession("old", DayOfWeek.FRIDAY, 1, "OLD", "Old", "09:00–10:00")
+        val before = AppData(schedule = listOf(slot), rules = emptyList())
+            .withMarkingStyle(MarkingStyle.ASSUME_PRESENT, friday)
+        val edited = before.copy(schedule = listOf(slot.copy(id = "new", subject = "NEW", title = "New")))
+            .preserveCountedHistory(before, friday, LocalTime.NOON)
+        val roundTrip = edited.withMarkingStyle(MarkingStyle.MARK_EACH, friday, LocalTime.NOON)
+            .withMarkingStyle(MarkingStyle.ASSUME_PRESENT, friday, LocalTime.NOON)
+        assertEquals(edited.assumeAfter, roundTrip.assumeAfter)
+        assertEquals(Counts(1, 1), roundTrip.tracking(friday, LocalTime.MAX).baseline!!.counts)
+    }
+    @Test fun timetableEditsInMarkEachAlsoPreventReenabledAssumptionsDuplicatingSavedSlots() {
+        val friday = LocalDate.parse("2026-10-16")
+        val morning = WeekSession("old", DayOfWeek.FRIDAY, 1, "OLD", "Old", "09:00–10:00")
+        val before = AppData(schedule = listOf(morning), rules = emptyList())
+            .withMarks(friday, setOf(morning.id), AttendanceMark.PRESENT)
+        val edited = before.copy(schedule = listOf(morning.copy(id = "new"),
+            morning.copy(id = "afternoon", period = 2, time = "14:00–15:00")))
+            .preserveCountedHistory(before, friday, LocalTime.NOON)
+        val enabled = edited.withMarkingStyle(MarkingStyle.ASSUME_PRESENT, friday, LocalTime.NOON)
+        assertEquals(Counts(1, 1), enabled.tracking(friday, LocalTime.NOON).baseline!!.counts)
+        assertEquals(Counts(2, 2), enabled.tracking(friday, LocalTime.MAX).baseline!!.counts)
+        assertEquals(enabled, StateCodec.decode(StateCodec.encode(enabled)))
     }
     private fun sheet() = Baseline(Counts(161, 185), listOf(SubjectAttendance("RETAIL", "Retail Management", Counts(8, 9))),
         LocalDate.parse("2026-09-30"), month = Counts(43, 45))

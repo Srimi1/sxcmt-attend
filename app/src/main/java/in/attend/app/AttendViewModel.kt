@@ -9,10 +9,20 @@ import `in`.attend.core.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.*
+import java.util.concurrent.atomic.AtomicLong
 
 data class AttendUiState(val data: AppData = AppData(), val isDemo: Boolean = false, val loaded: Boolean = false)
 
+/** Invalidates delayed routine results when the local class/account context changes. */
+internal class RoutineRevision {
+    private val value = AtomicLong()
+    fun current(): Long = value.get()
+    fun invalidate(): Long = value.incrementAndGet()
+    fun isCurrent(revision: Long): Boolean = value.get() == revision
+}
+
 class AttendViewModel(application: Application) : AndroidViewModel(application) {
+    private val routineRevision = RoutineRevision()
     private val repository = (application as AttendApplication).repository
     private val routine = (application as AttendApplication).routine
     val account = MutableStateFlow(routine.email.takeIf { routine.signedIn })
@@ -24,7 +34,7 @@ class AttendViewModel(application: Application) : AndroidViewModel(application) 
     fun update(transform: (AppData) -> AppData) {
         val demo = demoData.value
         if (demo != null) {
-            runCatching { transform(demo).also { it.baseline } }
+            runCatching { transform(demo).preserveCountedHistory(demo).also { it.baseline } }
                 .onSuccess { demoData.value = it }
                 .onFailure { notice.value = it.message ?: "Could not save changes" }
             return
@@ -54,6 +64,7 @@ class AttendViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun clearData(done: () -> Unit) {
+        routineRevision.invalidate()
         viewModelScope.launch {
             repository.clear(); routine.forget(); Reminders.schedule(getApplication(), null); account.value = null; demoData.value = null
             notice.value = "Your attendance data was cleared from this device."; done()
@@ -70,53 +81,55 @@ class AttendViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun online(success: String? = null, block: suspend () -> Unit) {
+    private fun online(success: String? = null, changesContext: Boolean = false, block: suspend (Long) -> Unit) {
         if (busy.value) return
         busy.value = true
+        val revision = if (changesContext) routineRevision.invalidate() else routineRevision.current()
         viewModelScope.launch {
-            runCatching { block() }.onSuccess { success?.let { notice.value = it } }
-                .onFailure { notice.value = it.message ?: "Something went wrong" }
-            account.value = routine.email.takeIf { routine.signedIn }
+            runCatching { block(revision) }.onSuccess { if (routineRevision.isCurrent(revision)) success?.let { notice.value = it } }
+                .onFailure { if (routineRevision.isCurrent(revision)) notice.value = it.message ?: "Something went wrong" }
+            if (routineRevision.isCurrent(revision)) account.value = routine.email.takeIf { routine.signedIn }
             busy.value = false
         }
     }
-    private suspend fun adopt(link: ClassLink) {
+    private suspend fun adopt(link: ClassLink, revision: Long, replaceClass: Boolean = false) {
         val (versions, owner) = routine.history(link.id)
-        repository.update { it.withRoutine(link.copy(isOwner = owner), versions) }
+        repository.update { if (routineRevision.isCurrent(revision) && (replaceClass || it.classLink?.id == link.id)) it.withRoutine(link.copy(isOwner = owner), versions) else it }
     }
 
-    fun sendCode(email: String, sent: () -> Unit) = online("Code sent to $email. It expires in 5 minutes.") { routine.sendCode(email); sent() }
-    fun verifyCode(email: String, code: String, done: () -> Unit) = online("Signed in") { routine.verifyCode(email, code); done() }
-    fun createClass(name: String) = online("Class created. Share the join code with classmates.") {
+    fun sendCode(email: String, sent: () -> Unit) = online("Code sent to $email. It expires in 5 minutes.") { revision -> routine.sendCode(email); if (routineRevision.isCurrent(revision)) sent() }
+    fun verifyCode(email: String, code: String, done: () -> Unit) = online("Signed in") { revision -> routine.verifyCode(email, code); if (routineRevision.isCurrent(revision)) done() }
+    fun createClass(name: String) = online("Class created. Share the join code with classmates.", changesContext = true) { revision ->
         val data = ui.value.data
         Routines.validate(data.schedule)?.let { throw IllegalArgumentException(it) }
-        adopt(routine.createClass(name, data.schedule, LocalDate.now()))
+        adopt(routine.createClass(name, data.schedule, LocalDate.now()), revision, replaceClass = true)
     }
-    fun joinClass(code: String) = online("Joined. Your timetable now follows the class routine.") { adopt(routine.joinClass(code)) }
+    fun joinClass(code: String) = online("Joined. Your timetable now follows the class routine.", changesContext = true) { revision -> adopt(routine.joinClass(code), revision, replaceClass = true) }
     fun syncRoutine(quiet: Boolean = false) {
         val link = ui.value.data.classLink ?: return
-        if (!routine.signedIn || demoData.value != null) return
-        if (quiet) viewModelScope.launch { runCatching { adopt(link) } } else online("Routine is up to date") { adopt(link) }
+        if (!routine.signedIn || demoData.value != null || busy.value) return
+        val revision = routineRevision.current()
+        if (quiet) viewModelScope.launch { runCatching { adopt(link, revision) } } else online("Routine is up to date") { adopt(link, it) }
     }
     fun publishRoutine(sessions: List<WeekSession>, from: LocalDate, note: String) {
         val link = ui.value.data.classLink ?: return
-        online("New routine version shared with your class") { routine.publish(link.id, sessions, from, note); adopt(link) }
+        online("New routine version shared with your class", changesContext = true) { revision -> routine.publish(link.id, sessions, from, note); adopt(link, revision) }
     }
     fun leaveClass() {
         val link = ui.value.data.classLink ?: return
-        online("You left ${link.name}. Your timetable stays on this phone.") {
-            routine.leaveClass(link.id); repository.update { it.withoutClass() }
+        online("You left ${link.name}. Your timetable stays on this phone.", changesContext = true) { revision ->
+            routine.leaveClass(link.id); repository.update { if (routineRevision.isCurrent(revision)) it.withoutClass() else it }
         }
     }
-    fun signOut() = online("Signed out") { routine.signOut(); repository.update { it.withoutClass() } }
-    fun deleteClassAccountData() = online("Removed from all classes and your account detached from routine history.") {
-        routine.deleteMyClassData(); repository.update { it.withoutClass() }
+    fun signOut() = online("Signed out", changesContext = true) { revision -> routine.signOut(); repository.update { if (routineRevision.isCurrent(revision)) it.withoutClass() else it } }
+    fun deleteClassAccountData() = online("Removed from all classes and your account detached from routine history.", changesContext = true) { revision ->
+        routine.deleteMyClassData(); repository.update { if (routineRevision.isCurrent(revision)) it.withoutClass() else it }
     }
     fun acceptRoutine(version: RoutineVersion) { update { it.acceptRoutine(version) }; notice.value = "Timetable updated to version ${version.version}" }
     fun dismissRoutine(version: RoutineVersion) { update { it.copy(dismissedRoutineVersion = version.version) }; notice.value = "Kept your timetable. You can apply it later from Version history." }
     fun rotateCode() {
         val link = ui.value.data.classLink ?: return
-        online("New join code made. The old code no longer works.") { val fresh = routine.rotateCode(link.id); repository.update { it.copy(classLink = fresh.copy(isOwner = true)) } }
+        online("New join code made. The old code no longer works.", changesContext = true) { revision -> val fresh = routine.rotateCode(link.id); repository.update { if (routineRevision.isCurrent(revision)) it.copy(classLink = fresh.copy(isOwner = true)) else it } }
     }
     companion object {
         private fun sampleData(): AppData {

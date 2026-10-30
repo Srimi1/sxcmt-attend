@@ -25,18 +25,22 @@ import java.util.UUID
 @Composable
 fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
                    mark: (LocalDate, Set<String>, AttendanceMark?) -> Unit, noClass: (LocalDate, WeekSession, Boolean) -> Unit, forecast: () -> Unit) {
-    var selected by remember { mutableStateOf(LocalDate.now()) }
+    val now = LocalAttendanceTime.current
+    val today = now.toLocalDate()
+    val base = data.tracking(today, now.toLocalTime()).baseline
+    var selected by remember { mutableStateOf(today) }
     var month by remember { mutableStateOf(YearMonth.from(selected)) }
     var adding by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<CalendarException?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
     var showMonth by remember { mutableStateOf(false) }
-    val teachingEnd = data.teachingEnd ?: data.baseline?.termEnd
+    val teachingEnd = data.teachingEnd ?: base?.termEnd
     val sessions = data.periodsOn(selected)
     val assumeMode = data.markingStyle == MarkingStyle.ASSUME_PRESENT
-    val pastOrToday = selected <= LocalDate.now()
+    val pastOrToday = selected <= today
     val covered = data.sheetBaseline?.asOf?.let { selected <= it } == true
-    val dayEntries = data.entries.filter { it.date == selected && it.sessionId in sessions.map { s -> s.session.id } }
+    val heldSessions = sessions.filterNot { data.isNoClass(selected, it.session.id) }
+    val dayEntries = data.entries.filter { it.date == selected && it.sessionId in heldSessions.map { s -> s.session.id } }
     val closed = data.rules.filter { it.kind == ExceptionKind.CLOSURE && selected in it.start..it.end }
     fun record(ids: Set<String>, value: AttendanceMark?) {
         mark(selected, ids, value)
@@ -45,9 +49,9 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
     Page("Calendar & attendance", "Mark periods / plan time off") {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             DateButton("Date", selected, { selected = it; month = YearMonth.from(it); feedback = null }, Modifier.weight(1f))
-            TextButton(onClick = { selected = LocalDate.now(); month = YearMonth.from(selected); feedback = null }) { Text("Today") }
+            TextButton(onClick = { selected = today; month = YearMonth.from(selected); feedback = null }) { Text("Today") }
         }
-        val total = data.baseline?.counts
+        val total = base?.counts
         if (total != null) InfoPanel("Your counter: ${total.attended} / ${total.held} · ${percent(total.percentage)}", if (assumeMode) "Finished periods count as present unless you tap A or No class." else "Your marked periods update this count immediately. Unmarked periods do not count as present.")
         TextButton(onClick = { showMonth = !showMonth }) { Text(if (showMonth) "Hide month" else "Show month calendar") }
         if (showMonth) {
@@ -82,14 +86,14 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
         closed.forEach { InfoPanel(it.label, "College closed. No held classes and no absence penalty. Reopens after ${it.end.format(ShortDate)}.") }
         feedback?.let { InfoPanel("Saved", it) }
         if (covered) InfoPanel("Covered by your sheet numbers", "This date is already included in the college sheet totals you entered. Mark periods after ${data.sheetBaseline!!.asOf.format(ShortDate)} to avoid double counting.")
-        else if (pastOrToday && sessions.isNotEmpty()) {
-            if (!assumeMode) Text("${dayEntries.count { it.mark == AttendanceMark.PRESENT }} present · ${dayEntries.count { it.mark == AttendanceMark.ABSENT }} absent · ${sessions.size - dayEntries.size} unmarked", style = MaterialTheme.typography.bodyMedium)
+        else if (pastOrToday && heldSessions.isNotEmpty()) {
+            if (!assumeMode) Text("${dayEntries.count { it.mark == AttendanceMark.PRESENT }} present · ${dayEntries.count { it.mark == AttendanceMark.ABSENT }} absent · ${heldSessions.size - dayEntries.size} unmarked", style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!assumeMode) FilledTonalButton(onClick = { record(sessions.map { it.session.id }.toSet(), AttendanceMark.PRESENT) }, modifier = Modifier.weight(1f)) { Text("All present") }
-                OutlinedButton(onClick = { record(sessions.map { it.session.id }.toSet(), AttendanceMark.ABSENT) }, modifier = Modifier.weight(1f)) { Text("All absent") }
+                if (!assumeMode) FilledTonalButton(onClick = { record(heldSessions.map { it.session.id }.toSet(), AttendanceMark.PRESENT) }, modifier = Modifier.weight(1f)) { Text("All present") }
+                OutlinedButton(onClick = { record(heldSessions.map { it.session.id }.toSet(), AttendanceMark.ABSENT) }, modifier = Modifier.weight(1f)) { Text("All absent") }
             }
         }
-        if (!pastOrToday && sessions.isNotEmpty()) InfoPanel("Plan this day", "Future absences change My plan in Forecast. They become recorded attendance only when you mark completed periods.")
+        if (!pastOrToday && heldSessions.isNotEmpty()) InfoPanel("Plan this day", "Future absences change My plan in Forecast. They become recorded attendance only when you mark completed periods.")
         NationalHolidays.name(selected)?.let { InfoPanel(it, "National holiday. No scheduled attendance sessions.") }
         if (selected.dayOfWeek == DayOfWeek.SUNDAY) InfoPanel("Sunday off", "No teaching sessions scheduled.")
         if (teachingEnd != null && selected > teachingEnd) InfoPanel("Beyond teaching term", "Teaching ends ${teachingEnd.format(ShortDate)}. No future sessions are generated after this date.")
@@ -143,7 +147,8 @@ fun CalendarScreen(data: AppData, update: ((AppData) -> AppData) -> Unit,
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RuleDialog(initial: LocalDate, schedule: List<WeekSession>, existing: CalendarException?, dismiss: () -> Unit, save: (CalendarException) -> Unit) {
-    var kind by remember { mutableStateOf(existing?.kind ?: if (initial > LocalDate.now()) ExceptionKind.ABSENCE else ExceptionKind.CLOSURE) }
+    val today = LocalAttendanceTime.current.toLocalDate()
+    var kind by remember { mutableStateOf(existing?.kind ?: if (initial > today) ExceptionKind.ABSENCE else ExceptionKind.CLOSURE) }
     var start by remember { mutableStateOf(existing?.start ?: initial) }
     var end by remember { mutableStateOf(existing?.end ?: initial) }
     var label by remember { mutableStateOf(existing?.label.orEmpty()) }
